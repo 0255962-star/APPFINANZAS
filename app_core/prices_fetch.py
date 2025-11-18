@@ -53,7 +53,6 @@ def _parse_chart_json(js) -> pd.Series:
     ts = r.get("timestamp", [])
     if not ts:
         return pd.Series(dtype=float)
-    # FIX: construir un DatetimeIndex antes de normalizar para evitar AttributeError.
     idx = (
         pd.to_datetime(ts, unit="s", utc=True)
         .tz_convert(None)
@@ -124,7 +123,6 @@ def fetch_yahoo_range(ticker, start, end=None):
         if d is None or d.empty:
             return pd.Series(dtype=float)
         s = pd.Series(d["Close"]).dropna()
-        # FIX: forzar DatetimeIndex con tz local antes de normalize().
         s.index = (
             pd.to_datetime(s.index, utc=True)
             .tz_convert(None)
@@ -181,7 +179,6 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
         _rebuild_prices_masters_light()
     final = cache_read_prices(tlist, start)
     if final is None or final.empty:
-        # FIX: sin datos nuevos regresamos DataFrame vacío pero válido para que la UI maneje el warning.
         return pd.DataFrame()
     final = final.dropna(axis=1, how="all")
     return final.sort_index()
