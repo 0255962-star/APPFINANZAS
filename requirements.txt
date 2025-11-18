@@ -1,0 +1,9 @@
+streamlit==1.38.0
+pandas==2.2.2
+numpy==1.26.4
+yfinance==0.2.43
+plotly==5.22.0
+gspread==6.1.2
+google-auth==2.35.0
+google-auth-oauthlib==1.2.1
+scipy==1.13.1
