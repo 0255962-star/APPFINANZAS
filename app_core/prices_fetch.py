@@ -53,9 +53,11 @@ def _parse_chart_json(js) -> pd.Series:
     ts = r.get("timestamp", [])
     if not ts:
         return pd.Series(dtype=float)
-    idx = pd.to_datetime(pd.Series(ts), unit="s", utc=True).dt.tz_convert(
-        None
-    ).normalize()
+    idx = (
+        pd.to_datetime(ts, unit="s", utc=True)
+        .tz_convert(None)
+        .normalize()
+    )
     try:
         adj = r.get("indicators", {}).get("adjclose", [])
         if adj and "adjclose" in adj[0]:
@@ -121,7 +123,11 @@ def fetch_yahoo_range(ticker, start, end=None):
         if d is None or d.empty:
             return pd.Series(dtype=float)
         s = pd.Series(d["Close"]).dropna()
-        s.index = pd.to_datetime(s.index).normalize()
+        s.index = (
+            pd.to_datetime(s.index, utc=True)
+            .tz_convert(None)
+            .normalize()
+        )
         s.name = ticker
         return s
     except Exception:
@@ -137,6 +143,8 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
 
     tlist = _clean_tickers(tickers)
     cached = cache_read_prices(tlist, start)
+    if cached is None:
+        cached = pd.DataFrame()
     need = [
         t
         for t in tlist
@@ -170,4 +178,7 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
             st.session_state.pop(k, None)
         _rebuild_prices_masters_light()
     final = cache_read_prices(tlist, start)
+    if final is None or final.empty:
+        return pd.DataFrame()
+    final = final.dropna(axis=1, how="all")
     return final.sort_index()
