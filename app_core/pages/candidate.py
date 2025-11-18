@@ -34,12 +34,43 @@ def get_company_info(ticker: str):
     t = yf.Ticker(ticker)
     info = {}
     try:
-        fi = getattr(t, "fast_info", {}) or {}
-        info.update({k: fi.get(k) for k in ["last_price", "market_cap", "beta"] if k in fi})
+        fast_obj = getattr(t, "fast_info", None)
     except Exception:
-        pass
+        fast_obj = None
+
+    def _fast_fetch(names):
+        if fast_obj is None:
+            return None
+        for name in names:
+            try:
+                if isinstance(fast_obj, dict) and name in fast_obj:
+                    return fast_obj.get(name)
+                val = getattr(fast_obj, name, None)
+                if val is not None:
+                    return val
+            except Exception:
+                continue
+        return None
+
+    # FIX: yfinance cambió los nombres en fast_info (snake_case vs camelCase).
+    fast_map = {
+        "last_price": ("last_price", "lastPrice"),
+        "market_cap": ("market_cap", "marketCap"),
+        "beta": ("beta",),
+    }
+    for target, candidates in fast_map.items():
+        val = _fast_fetch(candidates)
+        if val is not None:
+            info[target] = val
     try:
         gi = t.get_info()
+    except Exception:
+        gi = {}
+        try:
+            gi = getattr(t, "info", {}) or {}
+        except Exception:
+            gi = {}
+    try:
         if gi:
             info.update(
                 {
@@ -52,6 +83,8 @@ def get_company_info(ticker: str):
                     "forwardPE": gi.get("forwardPE"),
                     "trailingPE": gi.get("trailingPE"),
                     "dividendYield": gi.get("dividendYield"),
+                    "market_cap": gi.get("marketCap") or info.get("market_cap"),
+                    "beta": gi.get("beta") if gi.get("beta") is not None else info.get("beta"),
                 }
             )
     except Exception:
