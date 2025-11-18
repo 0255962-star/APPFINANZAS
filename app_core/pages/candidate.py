@@ -12,15 +12,8 @@ import plotly.express as px
 import streamlit as st
 import yfinance as yf
 
+from ..analysis_utils import build_metrics_comparison
 from ..masters import build_masters, get_setting, masters_expired, need_build
-from ..metrics import (
-    annualize_return,
-    annualize_vol,
-    calmar,
-    max_drawdown,
-    sharpe,
-    sortino,
-)
 from ..prices_fetch import ensure_prices, normalize_symbol
 from ..tx_positions import positions_from_tx
 
@@ -70,27 +63,20 @@ def render_candidate_page(window: str) -> None:
     """Render the Evaluar Candidato tab."""
     start_date = _start_date_for_window(window)
     st.title("🔎 Evaluar Candidato")
+    chart_benchmark = "SPY"
 
     if need_build("prices_master") or masters_expired():
         build_masters(sync=False)
 
     settings_df = st.session_state["settings_master"]
     prices_master = st.session_state["prices_master"]
-    bench_ret_full = st.session_state["bench_ret_master"]
-    benchmark = get_setting(settings_df, "Benchmark", "SPY", str)
 
     if start_date and prices_master is not None and not prices_master.empty:
         prices = prices_master.loc[pd.Timestamp(start_date) :]
     else:
         prices = prices_master.copy()
 
-    bench_ret = pd.Series(dtype=float)
-    if bench_ret_full is not None and not bench_ret_full.empty:
-        if prices is not None and not prices.empty:
-            bench_ret = bench_ret_full.reindex(prices.index).ffill()
-        else:
-            bench_ret = bench_ret_full
-
+    # --- Nueva funcionalidad: entrada del candidato y simulador interactivo ---
     c1, c2 = st.columns([2, 1])
     with c1:
         user_query = st.text_input(
@@ -120,13 +106,13 @@ def render_candidate_page(window: str) -> None:
     start_for_chart = start_date or (
         datetime.utcnow() - timedelta(days=365 * 3)
     ).strftime("%Y-%m-%d")
-    pxdf = ensure_prices([cand, benchmark], start_for_chart, persist=True)
+    pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True)
 
     if (
         pxdf is None
         or pxdf.empty
         or cand not in pxdf.columns
-        or benchmark not in pxdf.columns
+        or chart_benchmark not in pxdf.columns
     ):
         st.warning("No pude obtener suficientes datos para el candidato / SPY tras reintento.")
         st.stop()
@@ -145,24 +131,38 @@ def render_candidate_page(window: str) -> None:
     colA, colB = st.columns([2, 1])
     with colB:
         st.markdown(
+            f"**Empresa:** {name}  \n"
             f"**Sector:** {info.get('sector','—')}  \n"
             f"**Industria:** {info.get('industry','—')}  \n"
             f"**País:** {info.get('country','—')}"
         )
         if info.get("website"):
-            st.markdown(f"[Sitio web]({info.get('website')})")
+            st.markdown(f"[Sitio web oficial]({info.get('website')})")
     with colA:
         desc = info.get("longBusinessSummary", "")
         if desc:
             st.write(desc[:800] + ("…" if len(desc) > 800 else ""))
 
-    norm = pxdf.ffill() / pxdf.ffill().iloc[0]
-    st.plotly_chart(
-        px.line(norm[[cand, benchmark]], title=f"Comportamiento normalizado: {cand} vs {benchmark}"),
-        use_container_width=True,
-    )
+    norm = pxdf[[cand, chart_benchmark]].ffill()
+    for col in norm.columns:
+        series = norm[col].dropna()
+        if not series.empty:
+            norm[col] = norm[col] / series.iloc[0]
+    norm = norm.dropna(how="all")
+    if norm.empty:
+        st.info("No hay datos suficientes para graficar la comparación normalizada.")
+    else:
+        st.plotly_chart(
+            px.line(
+                norm,
+                title=f"{cand} vs {chart_benchmark} (normalizado)",
+                labels={"value": "Índice (base = 1)", "index": "Fecha"},
+            ),
+            use_container_width=True,
+        )
 
     with st.expander("📈 ¿Cómo cambiaría el portafolio si agrego este activo?"):
+        st.caption("Simulación hipotética; no modifica tus transacciones reales.")
         tx_df = st.session_state["tx_master"]
         prices_all = st.session_state["prices_master"]
         if start_date and prices_all is not None and not prices_all.empty:
@@ -186,60 +186,30 @@ def render_candidate_page(window: str) -> None:
             wv = w_now.reindex(rets.columns).fillna(0).values
             port_ret_now = (rets * wv).sum(axis=1)
 
-            cand_ret = (
-                pxdf[[cand]].pct_change().dropna().reindex(port_ret_now.index).ffill()[cand]
-            )
-            w_new = weight_new
-            port_ret_new = port_ret_now * (1 - w_new) + cand_ret * w_new
+            sim_start = prices.index[0].strftime("%Y-%m-%d")
+            cand_hist = ensure_prices([cand], sim_start, persist=True)
+            if cand_hist is None or cand_hist.empty or cand not in cand_hist.columns:
+                st.info("No pude obtener precios históricos suficientes del candidato para simular.")
+            else:
+                cand_px = cand_hist[cand].reindex(prices.index).ffill()
+                cand_ret = cand_px.pct_change().dropna()
+                combo = pd.concat(
+                    [
+                        port_ret_now.rename("port"),
+                        cand_ret.rename("cand"),
+                    ],
+                    axis=1,
+                ).dropna()
+                if combo.empty:
+                    st.info("No hubo traslape suficiente entre el portafolio y el ticker para simular.")
+                else:
+                    port_base = combo["port"]
+                    cand_aligned = combo["cand"]
+                    w_new = weight_new
+                    port_ret_new = port_base * (1 - w_new) + cand_aligned * w_new
 
-            rf = get_setting(settings_df, "RF", 0.03, float)
+                    rf = get_setting(settings_df, "RF", 0.03, float)
+                    comp = build_metrics_comparison(port_base, port_ret_new, rf)
+                    st.dataframe(comp.table, use_container_width=True)
 
-            def mset(s):
-                return (
-                    annualize_return(s),
-                    annualize_vol(s),
-                    sharpe(s, rf),
-                    max_drawdown((1 + s).cumprod()),
-                    sortino(s, rf),
-                    calmar(s),
-                )
-
-            r0, v0, sh0, dd0, so0, ca0 = mset(port_ret_now)
-            r1, v1, sh1, dd1, so1, ca1 = mset(port_ret_new)
-            dfm = pd.DataFrame(
-                {
-                    "Métrica": [
-                        "Rend. anualizado",
-                        "Vol. anualizada",
-                        "Sharpe",
-                        "Max Drawdown",
-                        "Sortino",
-                        "Calmar",
-                    ],
-                    "Actual": [
-                        f"{(r0 or 0)*100:,.2f}%",
-                        f"{(v0 or 0)*100:,.2f}%",
-                        f"{(sh0 or 0):.2f}",
-                        f"{(dd0 or 0)*100:,.2f}%",
-                        f"{(so0 or 0):.2f}",
-                        f"{(ca0 or 0):.2f}",
-                    ],
-                    "Con candidato": [
-                        f"{(r1 or 0)*100:,.2f}%",
-                        f"{(v1 or 0)*100:,.2f}%",
-                        f"{(sh1 or 0):.2f}",
-                        f"{(dd1 or 0)*100:,.2f}%",
-                        f"{(so1 or 0):.2f}",
-                        f"{(ca1 or 0):.2f}",
-                    ],
-                    "Δ": [
-                        f"{((r1 or 0)-(r0 or 0))*100:,.2f} pp",
-                        f"{((v1 or 0)-(v0 or 0))*100:,.2f} pp",
-                        f"{((sh1 or 0)-(sh0 or 0)):.2f}",
-                        f"{((dd1 or 0)-(dd0 or 0))*100:,.2f} pp",
-                        f"{((so1 or 0)-(so0 or 0)):.2f}",
-                        f"{((ca1 or 0)-(ca0 or 0)):.2f}",
-                    ],
-                }
-            )
-            st.dataframe(dfm, use_container_width=True)
+    # --- Fin nueva funcionalidad: simulador de incorporación ---
