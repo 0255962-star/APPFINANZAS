@@ -107,7 +107,9 @@ def render_candidate_page(window: str) -> None:
         datetime.utcnow() - timedelta(days=365 * 3)
     ).strftime("%Y-%m-%d")
     # FIX: permitir continuar incluso si alguna serie no está disponible.
-    pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True) or pd.DataFrame()
+    pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True)
+    if pxdf is None:
+        pxdf = pd.DataFrame()
     cand_prices = pxdf.get(cand)
     bench_prices = pxdf.get(chart_benchmark)
     cand_has_prices = cand_prices is not None and not cand_prices.dropna().empty
