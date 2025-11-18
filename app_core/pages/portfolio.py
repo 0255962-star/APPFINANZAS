@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -10,6 +11,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from ..analysis_utils import build_metrics_comparison, interpret_candidate_effect
 from ..masters import build_masters, get_setting, masters_expired, need_build
 from ..metrics import (
     annualize_return,
@@ -19,6 +21,7 @@ from ..metrics import (
     sharpe,
     sortino,
 )
+from ..prices_fetch import ensure_prices, normalize_symbol
 from ..tx_positions import delete_transactions_by_ticker, positions_from_tx
 from ..ui_config import safe_rerun
 
@@ -57,6 +60,7 @@ def render_portfolio_page(window: str) -> None:
     tx_df = st.session_state["tx_master"]
     settings_df = st.session_state["settings_master"]
     benchmark = get_setting(settings_df, "Benchmark", "SPY", str)
+    rf = get_setting(settings_df, "RF", 0.03, float)
 
     prices_master = st.session_state["prices_master"]
     bench_ret_full = st.session_state["bench_ret_master"]
@@ -184,6 +188,8 @@ def render_portfolio_page(window: str) -> None:
                 st.session_state[prev_key]["➖"] = False
                 st.info("Operación cancelada.")
 
+    port_ret = pd.Series(dtype=float)
+
     if prices is not None and not prices.empty and prices.shape[0] >= 2 and len(w) > 0:
         c_top1, c_top2 = st.columns([2, 1])
         with c_top1:
@@ -193,7 +199,6 @@ def render_portfolio_page(window: str) -> None:
                 (rets * wv).sum(axis=1) if rets.shape[1] and len(wv) else pd.Series(dtype=float)
             )
 
-            rf = get_setting(settings_df, "RF", 0.03, float)
             c1, c2, c3, c4, c5, c6 = st.columns(6)
             c1.metric("Rend. anualizado", f"{(annualize_return(port_ret) or 0)*100:,.2f}%")
             c2.metric("Vol. anualizada", f"{(annualize_vol(port_ret) or 0)*100:,.2f}%")
@@ -217,3 +222,78 @@ def render_portfolio_page(window: str) -> None:
         st.info("No hay pesos válidos para calcular métricas.")
     else:
         st.info("Necesito al menos 2 días de histórico para calcular métricas.")
+
+    # --- Nueva funcionalidad: expander para pre-evaluar candidatos ---
+    with st.expander("Evaluar candidato antes de añadirlo"):
+        st.caption("Simulación rápida para estimar el impacto antes de registrar un nuevo peso.")
+        eval_cols = st.columns([2, 1])
+        eval_key = f"pre_eval_{window}"
+        with eval_cols[0]:
+            cand_input = st.text_input(
+                "Ticker a evaluar",
+                placeholder="Ej. NVDA, KO, BRK.B",
+                key=f"{eval_key}_ticker",
+            )
+        with eval_cols[1]:
+            weight_sim = st.slider(
+                "Peso hipotético",
+                min_value=0.0,
+                max_value=0.10,
+                value=0.02,
+                step=0.01,
+                key=f"{eval_key}_weight",
+                help="Peso hipotético que tendría el nuevo activo en tu portafolio.",
+            )
+        trigger = st.button("Evaluar impacto", key=f"{eval_key}_btn")
+
+        if trigger:
+            if not cand_input:
+                st.info("Ingresa un ticker para evaluar su incorporación.")
+            elif prices is None or prices.empty or prices.shape[0] < 2 or port_ret.empty:
+                st.info("Necesito histórico del portafolio para correr la simulación.")
+            else:
+                cand = normalize_symbol(cand_input)
+                if not re.match(r"^[A-Z0-9\.\-]+$", cand):
+                    st.error("Ticker inválido.")
+                else:
+                    sim_start = prices.index[0].strftime("%Y-%m-%d")
+                    cand_hist = ensure_prices([cand], sim_start, persist=True)
+                    if cand_hist is None or cand_hist.empty or cand not in cand_hist.columns:
+                        st.warning("No encontré datos suficientes de ese ticker.")
+                    else:
+                        cand_px = cand_hist[cand].reindex(prices.index).ffill()
+                        cand_ret = cand_px.pct_change().dropna()
+                        combo = pd.concat(
+                            [port_ret.rename("port"), cand_ret.rename("cand")], axis=1
+                        ).dropna()
+                        if combo.empty:
+                            st.info("No hubo intersección suficiente de fechas para correr la simulación.")
+                        else:
+                            port_base = combo["port"]
+                            cand_aligned = combo["cand"]
+                            port_ret_new = port_base * (1 - weight_sim) + cand_aligned * weight_sim
+                            comp = build_metrics_comparison(port_base, port_ret_new, rf)
+                            st.dataframe(comp.table, use_container_width=True)
+
+                            growth = pd.DataFrame(
+                                {
+                                    "Actual": (1 + port_base).cumprod(),
+                                    f"+{cand}": (1 + port_ret_new).cumprod(),
+                                }
+                            )
+                            st.plotly_chart(
+                                px.line(
+                                    growth,
+                                    title=f"Crecimiento de 1.0: Actual vs +{cand}",
+                                    labels={"index": "Fecha", "value": "Índice"},
+                                ),
+                                use_container_width=True,
+                            )
+                            interp = interpret_candidate_effect(
+                                comp.current, comp.new, cand, weight_sim
+                            )
+                            st.markdown(
+                                f"> {interp.replace(chr(10), '<br>')}",
+                                unsafe_allow_html=True,
+                            )
+    # --- Fin nueva funcionalidad: expander para pre-evaluar candidatos ---
