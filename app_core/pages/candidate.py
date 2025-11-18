@@ -120,16 +120,56 @@ def render_candidate_page(window: str) -> None:
         st.warning(f"No pude obtener suficientes datos de {chart_benchmark} tras reintento.")
 
     info = get_company_info(cand)
+    # FIX: usar precios descargados como respaldo cuando la metadata de Yahoo viene vacía.
+    fallback_price = None
+    if cand_has_prices:
+        try:
+            fallback_price = float(cand_prices.ffill().iloc[-1])
+        except Exception:
+            fallback_price = None
+    if fallback_price is not None and not info.get("last_price"):
+        info["last_price"] = fallback_price
+    beta_calc = None
+    beta_current = info.get("beta")
+    needs_beta = (
+        beta_current is None
+        or (isinstance(beta_current, (float, int)) and np.isnan(beta_current))
+        or beta_current == 0
+    )
+    if needs_beta and cand_has_prices and bench_has_prices:
+        aligned = pxdf[[cand, chart_benchmark]].dropna()
+        if aligned.shape[0] >= 5:
+            rets = aligned.pct_change().dropna()
+            cov = rets[[cand, chart_benchmark]].cov()
+            var_b = cov.loc[chart_benchmark, chart_benchmark]
+            if var_b and not np.isnan(var_b) and var_b != 0:
+                beta_calc = cov.loc[cand, chart_benchmark] / var_b
+    if beta_calc is not None and not np.isnan(beta_calc):
+        info["beta"] = beta_calc
+    def _fmt_value(val, fmt="{:,.2f}"):
+        try:
+            if val is None:
+                return "—"
+            if isinstance(val, (float, int)) and np.isnan(val):
+                return "—"
+            return fmt.format(float(val))
+        except Exception:
+            return "—"
+
     name = info.get("longName") or cand
     st.subheader(f"{name} ({cand})")
     ks1, ks2, ks3, ks4, ks5, ks6 = st.columns(6)
-    ks1.metric("Precio", f"{info.get('last_price', np.nan):,.2f}" if info.get("last_price") else "—")
-    ks2.metric("Cap. de mercado", f"{(info.get('market_cap') or 0):,}")
-    ks3.metric("Beta", f"{info.get('beta') or '—'}")
-    ks4.metric("PE (TTM)", f"{info.get('trailingPE') or '—'}")
-    ks5.metric("PE (fwd)", f"{info.get('forwardPE') or '—'}")
+    ks1.metric("Precio", _fmt_value(info.get("last_price")))
+    market_cap_val = info.get("market_cap")
+    ks2.metric(
+        "Cap. de mercado",
+        "—" if not market_cap_val else f"{int(market_cap_val):,}",
+    )
+    ks3.metric("Beta", _fmt_value(info.get("beta"), "{:,.2f}"))
+    ks4.metric("PE (TTM)", _fmt_value(info.get("trailingPE"), "{:,.2f}"))
+    ks5.metric("PE (fwd)", _fmt_value(info.get("forwardPE"), "{:,.2f}"))
     dy = info.get("dividendYield")
-    ks6.metric("Div. Yield", f"{(dy*100):.2f}%" if dy else "—")
+    ks6.metric("Div. Yield", f"{float(dy)*100:,.2f}%" if dy else "—")
     colA, colB = st.columns([2, 1])
     with colB:
         st.markdown(
