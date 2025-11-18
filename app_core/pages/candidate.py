@@ -9,7 +9,6 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import requests
 import streamlit as st
 import yfinance as yf
 
@@ -18,69 +17,42 @@ from ..masters import build_masters, get_setting, masters_expired, need_build
 from ..prices_fetch import ensure_prices, normalize_symbol
 from ..tx_positions import positions_from_tx
 
-YAHOO_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-    ),
-    "Accept": "application/json,text/plain,*/*",
-}
-SUMMARY_MODULES = "price,summaryProfile,summaryDetail,defaultKeyStatistics"
 
-
-def _raw(val):
+def _clean_value(val):
     if isinstance(val, dict):
         return val.get("raw") if "raw" in val else val.get("fmt")
     return val
 
 
-def _fetch_quote_summary(ticker: str) -> dict:
-    """Hit Yahoo's quoteSummary endpoint to gather fundamental data."""
-    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
-    try:
-        resp = requests.get(
-            url,
-            params={"modules": SUMMARY_MODULES},
-            headers=YAHOO_HEADERS,
-            timeout=15,
-        )
-        if resp.status_code != 200:
-            return {}
-        payload = resp.json()
-        result = (
-            payload.get("quoteSummary", {})
-            .get("result", [])
-        )
-        if not result:
-            return {}
-        data = result[0] or {}
-    except Exception:
-        return {}
-
-    price = data.get("price", {}) or {}
-    profile = data.get("summaryProfile", {}) or {}
-    summary = data.get("summaryDetail", {}) or {}
-    stats = data.get("defaultKeyStatistics", {}) or {}
-
-    info = {
-        "longName": price.get("longName") or price.get("shortName"),
-        "last_price": _raw(price.get("regularMarketPrice")),
-        "market_cap": (
-            _raw(price.get("marketCap"))
-            or _raw(summary.get("marketCap"))
-        ),
-        "beta": _raw(stats.get("beta")) or _raw(price.get("beta")),
-        "trailingPE": _raw(summary.get("trailingPE")),
-        "forwardPE": _raw(summary.get("forwardPE")),
-        "dividendYield": _raw(summary.get("dividendYield")),
-        "sector": profile.get("sector"),
-        "industry": profile.get("industry"),
-        "country": profile.get("country"),
-        "website": profile.get("website"),
-        "longBusinessSummary": profile.get("longBusinessSummary"),
-    }
-    return {k: v for k, v in info.items() if v not in (None, "", {})}
-
+def _to_number(val):
+    val = _clean_value(val)
+    if val in (None, "", 0):
+        return None if val in (None, "") else 0
+    if isinstance(val, (int, float, np.number)):
+        try:
+            return float(val)
+        except Exception:
+            return None
+    if isinstance(val, str):
+        s = val.strip().upper().replace(",", "")
+        multiplier = 1
+        if s.endswith("T"):
+            multiplier = 1_000_000_000_000
+            s = s[:-1]
+        elif s.endswith("B"):
+            multiplier = 1_000_000_000
+            s = s[:-1]
+        elif s.endswith("M"):
+            multiplier = 1_000_000
+            s = s[:-1]
+        elif s.endswith("K"):
+            multiplier = 1_000
+            s = s[:-1]
+        try:
+            return float(s) * multiplier
+        except Exception:
+            return None
+    return None
 
 def _start_date_for_window(window: str) -> Optional[str]:
     period_map = {"6M": 180, "1Y": 365, "3Y": 365 * 3, "5Y": 365 * 5}
@@ -96,7 +68,74 @@ def _start_date_for_window(window: str) -> Optional[str]:
 def get_company_info(ticker: str):
     """Return cached metadata for a ticker."""
     t = yf.Ticker(ticker)
-    info = _fetch_quote_summary(ticker) or {}
+    info = {}
+
+    def _safe_data(attr):
+        try:
+            data = getattr(t, attr, {}) or {}
+            if callable(data):
+                data = data()
+            return data or {}
+        except Exception:
+            return {}
+
+    price_data = _safe_data("price")
+    profile_data = _safe_data("summary_profile")
+    summary_data = _safe_data("summary_detail")
+    stats_data = _safe_data("key_stats")
+
+    info.update(
+        {
+            "longName": price_data.get("longName") or price_data.get("shortName"),
+            "last_price": _to_number(price_data.get("regularMarketPrice")),
+            "market_cap": _to_number(price_data.get("marketCap"))
+            or _to_number(summary_data.get("marketCap")),
+            "beta": _to_number(stats_data.get("beta"))
+            or _to_number(price_data.get("beta")),
+            "trailingPE": _to_number(summary_data.get("trailingPE")),
+            "forwardPE": _to_number(summary_data.get("forwardPE")),
+            "dividendYield": _to_number(summary_data.get("dividendYield")),
+            "sector": profile_data.get("sector"),
+            "industry": profile_data.get("industry"),
+            "country": profile_data.get("country"),
+            "website": profile_data.get("website"),
+            "longBusinessSummary": profile_data.get("longBusinessSummary"),
+        }
+    )
+    try:
+        gi = t.get_info()
+    except Exception:
+        gi = {}
+        try:
+            gi = getattr(t, "info", {}) or {}
+        except Exception:
+            gi = {}
+    if gi:
+        mapping = {
+            "longName": ("longName", "shortName"),
+            "last_price": ("regularMarketPrice", "previousClose"),
+            "market_cap": ("marketCap",),
+            "beta": ("beta",),
+            "trailingPE": ("trailingPE",),
+            "forwardPE": ("forwardPE",),
+            "dividendYield": ("dividendYield", "trailingAnnualDividendYield"),
+            "sector": ("sector",),
+            "industry": ("industry",),
+            "country": ("country",),
+            "website": ("website", "websiteUrl"),
+            "longBusinessSummary": ("longBusinessSummary",),
+        }
+        for target, candidates in mapping.items():
+            if info.get(target) not in (None, "", 0):
+                continue
+            for name in candidates:
+                if target in {"sector", "industry", "country", "website", "longBusinessSummary"}:
+                    val = gi.get(name)
+                else:
+                    val = _to_number(gi.get(name))
+                if val not in (None, ""):
+                    info[target] = val
+                    break
     try:
         fast_obj = getattr(t, "fast_info", None)
     except Exception:
@@ -127,35 +166,6 @@ def get_company_info(ticker: str):
             val = _fast_fetch(candidates)
             if val is not None:
                 info[target] = val
-    try:
-        gi = t.get_info()
-    except Exception:
-        gi = {}
-        try:
-            gi = getattr(t, "info", {}) or {}
-        except Exception:
-            gi = {}
-    if gi:
-        for key, src in (
-            ("longName", ("longName", "shortName")),
-            ("sector", ("sector",)),
-            ("industry", ("industry",)),
-            ("website", ("website",)),
-            ("country", ("country",)),
-            ("longBusinessSummary", ("longBusinessSummary",)),
-            ("forwardPE", ("forwardPE",)),
-            ("trailingPE", ("trailingPE",)),
-            ("dividendYield", ("dividendYield",)),
-            ("market_cap", ("marketCap",)),
-            ("beta", ("beta",)),
-        ):
-            if key in info and info[key] not in (None, ""):
-                continue
-            for candidate in src:
-                val = gi.get(candidate)
-                if val not in (None, ""):
-                    info[key] = val
-                    break
     return info or {}
 
 
@@ -246,25 +256,34 @@ def render_candidate_page(window: str) -> None:
                 beta_calc = cov.loc[cand, chart_benchmark] / var_b
     if beta_calc is not None and not np.isnan(beta_calc):
         info["beta"] = beta_calc
+
     def _fmt_value(val, fmt="{:,.2f}"):
-        try:
-            if val is None:
-                return "—"
-            if isinstance(val, (float, int)) and np.isnan(val):
-                return "—"
-            return fmt.format(float(val))
-        except Exception:
+        num = _to_number(val)
+        if num is None:
             return "—"
+        return fmt.format(num)
+
+    def _fmt_cap(val):
+        num = _to_number(val)
+        if num is None:
+            return "—"
+        units = [
+            (1_000_000_000_000, "T"),
+            (1_000_000_000, "B"),
+            (1_000_000, "M"),
+        ]
+        for divisor, suffix in units:
+            if num >= divisor:
+                scaled = num / divisor
+                return f"{scaled:,.2f} {suffix}"
+        return f"{num:,.0f}"
 
     name = info.get("longName") or cand
     st.subheader(f"{name} ({cand})")
     ks1, ks2, ks3, ks4, ks5, ks6 = st.columns(6)
     ks1.metric("Precio", _fmt_value(info.get("last_price")))
     market_cap_val = info.get("market_cap")
-    ks2.metric(
-        "Cap. de mercado",
-        "—" if not market_cap_val else f"{int(market_cap_val):,}",
-    )
+    ks2.metric("Cap. de mercado", _fmt_cap(market_cap_val))
     ks3.metric("Beta", _fmt_value(info.get("beta"), "{:,.2f}"))
     ks4.metric("PE (TTM)", _fmt_value(info.get("trailingPE"), "{:,.2f}"))
     ks5.metric("PE (fwd)", _fmt_value(info.get("forwardPE"), "{:,.2f}"))
