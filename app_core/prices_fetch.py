@@ -145,6 +145,8 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
     cached = cache_read_prices(tlist, start)
     if cached is None:
         cached = pd.DataFrame()
+    # FIX: conservar los datos descargados aunque falle la escritura en PricesCache.
+    combined = cached.copy()
     need = [
         t
         for t in tlist
@@ -167,8 +169,14 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
             s = s2
         if s is not None and not s.empty:
             new_cols.append(s)
+    df_new = pd.DataFrame()
     if new_cols:
         df_new = pd.concat(new_cols, axis=1).sort_index()
+        combined = (
+            combined.combine_first(df_new)
+            if not combined.empty
+            else df_new.copy()
+        )
         if persist:
             try:
                 cache_append_prices(df_new)
@@ -178,6 +186,14 @@ def ensure_prices(tickers, start: str, persist: bool = True) -> pd.DataFrame:
             st.session_state.pop(k, None)
         _rebuild_prices_masters_light()
     final = cache_read_prices(tlist, start)
+    if (final is None or final.empty) and not combined.empty:
+        final = combined
+    elif final is not None and not final.empty and not df_new.empty:
+        missing = [
+            t for t in tlist if t not in final.columns or final[t].dropna().empty
+        ]
+        if missing:
+            final = final.combine_first(df_new)
     if final is None or final.empty:
         return pd.DataFrame()
     final = final.dropna(axis=1, how="all")
