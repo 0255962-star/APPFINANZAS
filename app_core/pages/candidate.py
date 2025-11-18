@@ -106,16 +106,16 @@ def render_candidate_page(window: str) -> None:
     start_for_chart = start_date or (
         datetime.utcnow() - timedelta(days=365 * 3)
     ).strftime("%Y-%m-%d")
-    pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True)
-
-    if (
-        pxdf is None
-        or pxdf.empty
-        or cand not in pxdf.columns
-        or chart_benchmark not in pxdf.columns
-    ):
-        st.warning("No pude obtener suficientes datos para el candidato / SPY tras reintento.")
-        st.stop()
+    # FIX: permitir continuar incluso si alguna serie no está disponible.
+    pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True) or pd.DataFrame()
+    cand_prices = pxdf.get(cand)
+    bench_prices = pxdf.get(chart_benchmark)
+    cand_has_prices = cand_prices is not None and not cand_prices.dropna().empty
+    bench_has_prices = bench_prices is not None and not bench_prices.dropna().empty
+    if not cand_has_prices:
+        st.warning("No pude obtener suficientes datos históricos del candidato tras reintento.")
+    if not bench_has_prices:
+        st.warning(f"No pude obtener suficientes datos de {chart_benchmark} tras reintento.")
 
     info = get_company_info(cand)
     name = info.get("longName") or cand
@@ -143,23 +143,26 @@ def render_candidate_page(window: str) -> None:
         if desc:
             st.write(desc[:800] + ("…" if len(desc) > 800 else ""))
 
-    norm = pxdf[[cand, chart_benchmark]].ffill()
-    for col in norm.columns:
-        series = norm[col].dropna()
-        if not series.empty:
-            norm[col] = norm[col] / series.iloc[0]
-    norm = norm.dropna(how="all")
-    if norm.empty:
-        st.info("No hay datos suficientes para graficar la comparación normalizada.")
+    if cand_has_prices and bench_has_prices:
+        norm = pxdf[[cand, chart_benchmark]].ffill()
+        for col in norm.columns:
+            series = norm[col].dropna()
+            if not series.empty:
+                norm[col] = norm[col] / series.iloc[0]
+        norm = norm.dropna(how="all")
+        if norm.empty:
+            st.info("No hay datos suficientes para graficar la comparación normalizada.")
+        else:
+            st.plotly_chart(
+                px.line(
+                    norm,
+                    title=f"{cand} vs {chart_benchmark} (normalizado)",
+                    labels={"value": "Índice (base = 1)", "index": "Fecha"},
+                ),
+                use_container_width=True,
+            )
     else:
-        st.plotly_chart(
-            px.line(
-                norm,
-                title=f"{cand} vs {chart_benchmark} (normalizado)",
-                labels={"value": "Índice (base = 1)", "index": "Fecha"},
-            ),
-            use_container_width=True,
-        )
+        st.info("No se pudo graficar la comparación normalizada por falta de datos completos.")
 
     with st.expander("📈 ¿Cómo cambiaría el portafolio si agrego este activo?"):
         st.caption("Simulación hipotética; no modifica tus transacciones reales.")
