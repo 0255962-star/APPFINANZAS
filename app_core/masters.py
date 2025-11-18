@@ -96,9 +96,15 @@ def build_masters(sync: bool):
 
 def _rebuild_prices_masters_light():
     """Reconstruye en sesión los masters que dependen de PricesCache sin tocar Transactions ni Settings."""
-    settings_df = st.session_state.get("settings_master") or read_sheet("Settings")
+    # FIX: evitar evaluar DataFrames como booleanos para no disparar ValueError y lecturas innecesarias.
+    settings_df = st.session_state.get("settings_master")
+    if settings_df is None or settings_df.empty:
+        settings_df = read_sheet("Settings")
     benchmark = get_setting(settings_df, "Benchmark", "SPY", str)
-    tx_df = st.session_state.get("tx_master") or read_sheet("Transactions")
+
+    tx_df = st.session_state.get("tx_master")
+    if tx_df is None or tx_df.empty:
+        tx_df = read_sheet("Transactions")
     tickers = sorted(
         set(
             t
@@ -122,4 +128,3 @@ def _rebuild_prices_masters_light():
     st.session_state["prices_master"] = prices if prices is not None else pd.DataFrame()
     st.session_state["bench_ret_master"] = bench_ret
     st.session_state["last_map_master"] = last_map
-
