@@ -9,6 +9,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 import yfinance as yf
 
@@ -16,6 +17,69 @@ from ..analysis_utils import build_metrics_comparison
 from ..masters import build_masters, get_setting, masters_expired, need_build
 from ..prices_fetch import ensure_prices, normalize_symbol
 from ..tx_positions import positions_from_tx
+
+YAHOO_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+    ),
+    "Accept": "application/json,text/plain,*/*",
+}
+SUMMARY_MODULES = "price,summaryProfile,summaryDetail,defaultKeyStatistics"
+
+
+def _raw(val):
+    if isinstance(val, dict):
+        return val.get("raw") if "raw" in val else val.get("fmt")
+    return val
+
+
+def _fetch_quote_summary(ticker: str) -> dict:
+    """Hit Yahoo's quoteSummary endpoint to gather fundamental data."""
+    url = f"https://query1.finance.yahoo.com/v10/finance/quoteSummary/{ticker}"
+    try:
+        resp = requests.get(
+            url,
+            params={"modules": SUMMARY_MODULES},
+            headers=YAHOO_HEADERS,
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return {}
+        payload = resp.json()
+        result = (
+            payload.get("quoteSummary", {})
+            .get("result", [])
+        )
+        if not result:
+            return {}
+        data = result[0] or {}
+    except Exception:
+        return {}
+
+    price = data.get("price", {}) or {}
+    profile = data.get("summaryProfile", {}) or {}
+    summary = data.get("summaryDetail", {}) or {}
+    stats = data.get("defaultKeyStatistics", {}) or {}
+
+    info = {
+        "longName": price.get("longName") or price.get("shortName"),
+        "last_price": _raw(price.get("regularMarketPrice")),
+        "market_cap": (
+            _raw(price.get("marketCap"))
+            or _raw(summary.get("marketCap"))
+        ),
+        "beta": _raw(stats.get("beta")) or _raw(price.get("beta")),
+        "trailingPE": _raw(summary.get("trailingPE")),
+        "forwardPE": _raw(summary.get("forwardPE")),
+        "dividendYield": _raw(summary.get("dividendYield")),
+        "sector": profile.get("sector"),
+        "industry": profile.get("industry"),
+        "country": profile.get("country"),
+        "website": profile.get("website"),
+        "longBusinessSummary": profile.get("longBusinessSummary"),
+    }
+    return {k: v for k, v in info.items() if v not in (None, "", {})}
 
 
 def _start_date_for_window(window: str) -> Optional[str]:
@@ -32,7 +96,7 @@ def _start_date_for_window(window: str) -> Optional[str]:
 def get_company_info(ticker: str):
     """Return cached metadata for a ticker."""
     t = yf.Ticker(ticker)
-    info = {}
+    info = _fetch_quote_summary(ticker) or {}
     try:
         fast_obj = getattr(t, "fast_info", None)
     except Exception:
@@ -59,9 +123,10 @@ def get_company_info(ticker: str):
         "beta": ("beta",),
     }
     for target, candidates in fast_map.items():
-        val = _fast_fetch(candidates)
-        if val is not None:
-            info[target] = val
+        if target not in info:
+            val = _fast_fetch(candidates)
+            if val is not None:
+                info[target] = val
     try:
         gi = t.get_info()
     except Exception:
@@ -70,25 +135,27 @@ def get_company_info(ticker: str):
             gi = getattr(t, "info", {}) or {}
         except Exception:
             gi = {}
-    try:
-        if gi:
-            info.update(
-                {
-                    "longName": gi.get("longName") or gi.get("shortName"),
-                    "sector": gi.get("sector"),
-                    "industry": gi.get("industry"),
-                    "website": gi.get("website"),
-                    "country": gi.get("country"),
-                    "longBusinessSummary": gi.get("longBusinessSummary"),
-                    "forwardPE": gi.get("forwardPE"),
-                    "trailingPE": gi.get("trailingPE"),
-                    "dividendYield": gi.get("dividendYield"),
-                    "market_cap": gi.get("marketCap") or info.get("market_cap"),
-                    "beta": gi.get("beta") if gi.get("beta") is not None else info.get("beta"),
-                }
-            )
-    except Exception:
-        pass
+    if gi:
+        for key, src in (
+            ("longName", ("longName", "shortName")),
+            ("sector", ("sector",)),
+            ("industry", ("industry",)),
+            ("website", ("website",)),
+            ("country", ("country",)),
+            ("longBusinessSummary", ("longBusinessSummary",)),
+            ("forwardPE", ("forwardPE",)),
+            ("trailingPE", ("trailingPE",)),
+            ("dividendYield", ("dividendYield",)),
+            ("market_cap", ("marketCap",)),
+            ("beta", ("beta",)),
+        ):
+            if key in info and info[key] not in (None, ""):
+                continue
+            for candidate in src:
+                val = gi.get(candidate)
+                if val not in (None, ""):
+                    info[key] = val
+                    break
     return info or {}
 
 
