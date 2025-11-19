@@ -261,11 +261,33 @@ def render_candidate_page(window: str) -> None:
     price_now = info.get("last_price") or fallback_price
     investment_sim = (shares_to_simulate or 0) * (price_now or 0)
 
+    # Portafolio actual para calcular pesos y simulaciones
+    tx_df = st.session_state["tx_master"]
+    prices_all = st.session_state["prices_master"]
+    if start_date and prices_all is not None and not prices_all.empty:
+        port_prices = prices_all.loc[pd.Timestamp(start_date) :]
+    else:
+        port_prices = prices_all.copy()
+
+    last_map = st.session_state.get("last_map_master", {})
+    pos_df = positions_from_tx(tx_df, last_hint_map=last_map)
+    tot_mv = pos_df["MarketValue"].fillna(0).sum()
+
     name = info.get("longName") or cand
     st.subheader(f"{name} ({cand})")
     c_price, c_beta = st.columns(2)
     c_price.metric("Precio actual", _fmt_value(price_now))
-    c_beta.metric("Beta", _fmt_value(info.get("beta"), "{:,.2f}"))
+    beta_display = _fmt_value(info.get("beta"), "{:,.2f}")
+    if beta_display == "—":
+        beta_display = "N/D"
+    inv_text = f"${investment_sim:,.2f}"
+    if tot_mv > 0:
+        pct_text = f"{(investment_sim / tot_mv)*100:,.2f}% del portafolio"
+    else:
+        pct_text = "No se puede estimar"
+    with c_beta:
+        st.markdown("**Beta y peso simulado**")
+        st.write(f"Beta: {beta_display} | {inv_text} ({pct_text})")
 
     fundamentals_data = []
     for lbl, key, fmt_fn in (
@@ -298,15 +320,6 @@ def render_candidate_page(window: str) -> None:
             geo_lines.append(f"**{label}:** {val}")
     if info.get("website"):
         geo_lines.append(f"[Sitio oficial]({info.get('website')})")
-
-    if start_date and prices_master is not None and not prices_master.empty:
-        port_prices = prices_master.loc[pd.Timestamp(start_date) :]
-    else:
-        port_prices = prices_master.copy()
-
-    last_map = st.session_state.get("last_map_master", {})
-    pos_df = positions_from_tx(tx_df, last_hint_map=last_map)
-    tot_mv = pos_df["MarketValue"].fillna(0).sum()
 
     port_ret_now = pd.Series(dtype=float)
     port_ret_new = pd.Series(dtype=float)
