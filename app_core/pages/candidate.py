@@ -81,22 +81,33 @@ def get_company_info(ticker: str):
     t = yf.Ticker(ticker)
     info = {}
 
-    try:
-        fast = getattr(t, "fast_info", {}) or {}
-    except Exception:
-        fast = {}
+    info = {}
 
-    info["last_price"] = _to_number(fast.get("last_price") or fast.get("lastPrice"))
-    info["market_cap"] = _to_number(fast.get("market_cap") or fast.get("marketCap"))
-    info["beta"] = _to_number(fast.get("beta"))
-
-    try:
-        base = t.get_info() or {}
-    except Exception:
+    def _safe_fast(key):
         try:
-            base = getattr(t, "info", {}) or {}
+            fast_obj = getattr(t, "fast_info", None)
+            if fast_obj is None:
+                return None
+            if isinstance(fast_obj, dict):
+                return fast_obj.get(key)
+            return getattr(fast_obj, key, None)
         except Exception:
-            base = {}
+            return None
+
+    info["last_price"] = _to_number(_safe_fast("last_price") or _safe_fast("lastPrice"))
+    info["market_cap"] = _to_number(_safe_fast("market_cap") or _safe_fast("marketCap"))
+    info["beta"] = _to_number(_safe_fast("beta"))
+
+    base = {}
+    for attr in ("get_info", "info"):
+        try:
+            obj = getattr(t, attr)
+            data = obj() if callable(obj) else obj
+            if data:
+                base = data
+                break
+        except Exception:
+            continue
 
     def _fill_numeric(key, *candidates):
         if info.get(key) is not None:
