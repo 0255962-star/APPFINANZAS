@@ -54,6 +54,17 @@ def _to_number(val):
             return None
     return None
 
+
+def _clean_text(val):
+    if val is None:
+        return None
+    if isinstance(val, str):
+        s = val.strip()
+        if not s or s.lower() in {"none", "n/a", "nan", "null"}:
+            return None
+        return s
+    return str(val)
+
 def _start_date_for_window(window: str) -> Optional[str]:
     period_map = {"6M": 180, "1Y": 365, "3Y": 365 * 3, "5Y": 365 * 5}
     if window == "Max":
@@ -91,7 +102,7 @@ def get_company_info(ticker: str):
 
     info.update(
         {
-            "longName": price_data.get("longName") or price_data.get("shortName"),
+            "longName": _clean_text(price_data.get("longName") or price_data.get("shortName")),
             "last_price": _to_number(price_data.get("regularMarketPrice")),
             "market_cap": _to_number(price_data.get("marketCap"))
             or _to_number(summary_data.get("marketCap")),
@@ -100,11 +111,11 @@ def get_company_info(ticker: str):
             "trailingPE": _to_number(summary_data.get("trailingPE")),
             "forwardPE": _to_number(summary_data.get("forwardPE")),
             "dividendYield": _to_number(summary_data.get("dividendYield")),
-            "sector": profile_data.get("sector"),
-            "industry": profile_data.get("industry"),
-            "country": profile_data.get("country"),
-            "website": profile_data.get("website"),
-            "longBusinessSummary": profile_data.get("longBusinessSummary"),
+            "sector": _clean_text(profile_data.get("sector")),
+            "industry": _clean_text(profile_data.get("industry")),
+            "country": _clean_text(profile_data.get("country")),
+            "website": _clean_text(profile_data.get("website")),
+            "longBusinessSummary": _clean_text(profile_data.get("longBusinessSummary")),
         }
     )
     try:
@@ -121,7 +132,7 @@ def get_company_info(ticker: str):
                 return
             for name in names:
                 val = gi.get(name)
-                use_val = _to_number(val) if numeric else val
+                use_val = _to_number(val) if numeric else _clean_text(val)
                 if use_val not in (None, ""):
                     info[target] = use_val
                     return
@@ -280,6 +291,10 @@ def render_candidate_page(window: str) -> None:
                 return f"{scaled:,.2f} {suffix}"
         return f"{num:,.0f}"
 
+    def _fmt_text(val):
+        cleaned = _clean_text(val)
+        return cleaned if cleaned else "—"
+
     name = info.get("longName") or cand
     st.subheader(f"{name} ({cand})")
     ks1, ks2, ks3, ks4, ks5, ks6 = st.columns(6)
@@ -294,13 +309,14 @@ def render_candidate_page(window: str) -> None:
     colA, colB = st.columns([2, 1])
     with colB:
         st.markdown(
-            f"**Empresa:** {name}  \n"
-            f"**Sector:** {info.get('sector','—')}  \n"
-            f"**Industria:** {info.get('industry','—')}  \n"
-            f"**País:** {info.get('country','—')}"
+            f"**Empresa:** {_fmt_text(name)}  \n"
+            f"**Sector:** {_fmt_text(info.get('sector'))}  \n"
+            f"**Industria:** {_fmt_text(info.get('industry'))}  \n"
+            f"**País:** {_fmt_text(info.get('country'))}"
         )
         if info.get("website"):
-            st.markdown(f"[Sitio web oficial]({info.get('website')})")
+            site = info.get("website")
+            st.markdown(f"[Sitio web oficial]({site})")
     with colA:
         desc = info.get("longBusinessSummary", "")
         if desc:
