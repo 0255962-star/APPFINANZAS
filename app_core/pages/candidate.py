@@ -70,19 +70,24 @@ def get_company_info(ticker: str):
     t = yf.Ticker(ticker)
     info = {}
 
-    def _safe_data(attr):
-        try:
-            data = getattr(t, attr, {}) or {}
-            if callable(data):
-                data = data()
-            return data or {}
-        except Exception:
-            return {}
+    def _safe_data(attr_name, fallback_attrs=()):
+        for attr in (attr_name, *fallback_attrs):
+            try:
+                data = getattr(t, attr, {}) or {}
+                if callable(data):
+                    data = data()
+                if data:
+                    return data
+            except Exception:
+                continue
+        return {}
 
-    price_data = _safe_data("price")
-    profile_data = _safe_data("summary_profile")
-    summary_data = _safe_data("summary_detail")
-    stats_data = _safe_data("key_stats")
+    price_data = _safe_data("price", ("info",))
+    profile_data = _safe_data("summary_profile", ("profile", "info"))
+    summary_data = _safe_data("summary_detail", ("info",))
+    if not summary_data:
+        summary_data = {}
+    stats_data = _safe_data("key_stats", ("key_stats", "info"))
 
     info.update(
         {
@@ -111,31 +116,28 @@ def get_company_info(ticker: str):
         except Exception:
             gi = {}
     if gi:
-        mapping = {
-            "longName": ("longName", "shortName"),
-            "last_price": ("regularMarketPrice", "previousClose"),
-            "market_cap": ("marketCap",),
-            "beta": ("beta",),
-            "trailingPE": ("trailingPE",),
-            "forwardPE": ("forwardPE",),
-            "dividendYield": ("dividendYield", "trailingAnnualDividendYield"),
-            "sector": ("sector",),
-            "industry": ("industry",),
-            "country": ("country",),
-            "website": ("website", "websiteUrl"),
-            "longBusinessSummary": ("longBusinessSummary",),
-        }
-        for target, candidates in mapping.items():
+        def _fill(target, names, numeric=True):
             if info.get(target) not in (None, "", 0):
-                continue
-            for name in candidates:
-                if target in {"sector", "industry", "country", "website", "longBusinessSummary"}:
-                    val = gi.get(name)
-                else:
-                    val = _to_number(gi.get(name))
-                if val not in (None, ""):
-                    info[target] = val
-                    break
+                return
+            for name in names:
+                val = gi.get(name)
+                use_val = _to_number(val) if numeric else val
+                if use_val not in (None, ""):
+                    info[target] = use_val
+                    return
+
+        _fill("longName", ("longName", "shortName"), numeric=False)
+        _fill("last_price", ("regularMarketPrice", "previousClose"))
+        _fill("market_cap", ("marketCap",))
+        _fill("beta", ("beta",))
+        _fill("trailingPE", ("trailingPE",))
+        _fill("forwardPE", ("forwardPE",))
+        _fill("dividendYield", ("dividendYield", "trailingAnnualDividendYield"))
+        _fill("sector", ("sector",), numeric=False)
+        _fill("industry", ("industry",), numeric=False)
+        _fill("country", ("country",), numeric=False)
+        _fill("website", ("website", "websiteUrl"), numeric=False)
+        _fill("longBusinessSummary", ("longBusinessSummary",), numeric=False)
     try:
         fast_obj = getattr(t, "fast_info", None)
     except Exception:
