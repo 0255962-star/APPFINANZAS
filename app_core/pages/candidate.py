@@ -73,6 +73,7 @@ def _clean_text(val):
         return s
     return str(val)
 
+
 def _start_date_for_window(window: str) -> Optional[str]:
     period_map = {"6M": 180, "1Y": 365, "3Y": 365 * 3, "5Y": 365 * 5}
     if window == "Max":
@@ -87,8 +88,6 @@ def _start_date_for_window(window: str) -> Optional[str]:
 def get_company_info(ticker: str):
     """Return cached metadata for a ticker."""
     t = yf.Ticker(ticker)
-    info = {}
-
     info = {}
 
     def _safe_fast(key):
@@ -142,6 +141,18 @@ def get_company_info(ticker: str):
     _fill_numeric("trailingPE", "trailingPE")
     _fill_numeric("forwardPE", "forwardPE")
     _fill_numeric("dividendYield", "dividendYield", "trailingAnnualDividendYield")
+    _fill_numeric("payoutRatio", "payoutRatio")
+    _fill_numeric("revenue", "totalRevenue", "revenue")
+    _fill_numeric("revenueGrowth", "revenueGrowth")
+    _fill_numeric("trailingEps", "trailingEps")
+    _fill_numeric("earningsGrowth", "earningsGrowth")
+    _fill_numeric("grossMargins", "grossMargins")
+    _fill_numeric("operatingMargins", "operatingMargins")
+    _fill_numeric("profitMargins", "profitMargins")
+    _fill_numeric("totalCash", "totalCash")
+    _fill_numeric("totalDebt", "totalDebt")
+    _fill_numeric("quickRatio", "quickRatio")
+    _fill_numeric("currentRatio", "currentRatio")
     _fill_text("sector", "sector")
     _fill_text("industry", "industry")
     _fill_text("country", "country")
@@ -149,6 +160,39 @@ def get_company_info(ticker: str):
     _fill_text("longBusinessSummary", "longBusinessSummary")
 
     return info
+
+
+def _fmt_value(val, fmt="{:,.2f}"):
+    num = _to_number(val)
+    if num is None:
+        return "—"
+    return fmt.format(num)
+
+
+def _fmt_cap(val):
+    num = _to_number(val)
+    if num is None:
+        return "—"
+    for divisor, suffix in (
+        (1_000_000_000_000, "T"),
+        (1_000_000_000, "B"),
+        (1_000_000, "M"),
+    ):
+        if num >= divisor:
+            return f"{num / divisor:,.2f} {suffix}"
+    return f"{num:,.0f}"
+
+
+def _fmt_text(val):
+    cleaned = _clean_text(val)
+    return cleaned if cleaned else "—"
+
+
+def _fmt_percent(val):
+    num = _to_number(val)
+    if num is None:
+        return "—"
+    return f"{num * 100:,.2f}%"
 
 
 def render_candidate_page(window: str) -> None:
@@ -162,13 +206,8 @@ def render_candidate_page(window: str) -> None:
 
     settings_df = st.session_state["settings_master"]
     prices_master = st.session_state["prices_master"]
+    tx_df = st.session_state["tx_master"]
 
-    if start_date and prices_master is not None and not prices_master.empty:
-        prices = prices_master.loc[pd.Timestamp(start_date) :]
-    else:
-        prices = prices_master.copy()
-
-    # --- Nueva funcionalidad: entrada del candidato y simulador interactivo ---
     c1, c2 = st.columns([2, 1])
     with c1:
         user_query = st.text_input(
@@ -182,7 +221,7 @@ def render_candidate_page(window: str) -> None:
             min_value=0.0,
             value=0.0,
             step=1.0,
-            help="Cantidad hipotética de acciones a evaluar en el portafolio.",
+            help="Cantidad hipotética de acciones para evaluar.",
         )
 
     if not user_query:
@@ -197,7 +236,6 @@ def render_candidate_page(window: str) -> None:
     start_for_chart = start_date or (
         datetime.utcnow() - timedelta(days=365 * 3)
     ).strftime("%Y-%m-%d")
-    # FIX: permitir continuar incluso si alguna serie no está disponible.
     pxdf = ensure_prices([cand, chart_benchmark], start_for_chart, persist=True)
     if pxdf is None:
         pxdf = pd.DataFrame()
@@ -211,7 +249,6 @@ def render_candidate_page(window: str) -> None:
         st.warning(f"No pude obtener suficientes datos de {chart_benchmark} tras reintento.")
 
     info = get_company_info(cand)
-    # FIX: usar precios descargados como respaldo cuando la metadata de Yahoo viene vacía.
     fallback_price = None
     if cand_has_prices:
         try:
@@ -220,113 +257,102 @@ def render_candidate_page(window: str) -> None:
             fallback_price = None
     if fallback_price is not None and not info.get("last_price"):
         info["last_price"] = fallback_price
-    beta_calc = None
-    beta_current = info.get("beta")
-    needs_beta = (
-        beta_current is None
-        or (isinstance(beta_current, (float, int)) and np.isnan(beta_current))
-        or beta_current == 0
-    )
-    if needs_beta and cand_has_prices and bench_has_prices:
-        aligned = pxdf[[cand, chart_benchmark]].dropna()
-        if aligned.shape[0] >= 5:
-            rets = aligned.pct_change().dropna()
-            cov = rets[[cand, chart_benchmark]].cov()
-            var_b = cov.loc[chart_benchmark, chart_benchmark]
-            if var_b and not np.isnan(var_b) and var_b != 0:
-                beta_calc = cov.loc[cand, chart_benchmark] / var_b
-    if beta_calc is not None and not np.isnan(beta_calc):
-        info["beta"] = beta_calc
-
-    def _fmt_value(val, fmt="{:,.2f}"):
-        num = _to_number(val)
-        if num is None:
-            return "—"
-        return fmt.format(num)
-
-    def _fmt_cap(val):
-        num = _to_number(val)
-        if num is None:
-            return "—"
-        units = [
-            (1_000_000_000_000, "T"),
-            (1_000_000_000, "B"),
-            (1_000_000, "M"),
-        ]
-        for divisor, suffix in units:
-            if num >= divisor:
-                scaled = num / divisor
-                return f"{scaled:,.2f} {suffix}"
-        return f"{num:,.0f}"
-
-    def _fmt_text(val):
-        cleaned = _clean_text(val)
-        return cleaned if cleaned else "—"
-
-    name = info.get("longName") or cand
-    st.subheader(f"{name} ({cand})")
 
     price_now = info.get("last_price") or fallback_price
     investment_sim = (shares_to_simulate or 0) * (price_now or 0)
 
-    # Fundamental cards
-    cards = [
-        ("Precio actual", price_now, _fmt_value),
-        ("Cap. de mercado", info.get("market_cap"), _fmt_cap),
-        ("Beta", info.get("beta"), lambda v: _fmt_value(v, "{:,.2f}")),
-        ("PE (TTM)", info.get("trailingPE"), lambda v: _fmt_value(v, "{:,.2f}")),
-        ("PE (forward)", info.get("forwardPE"), lambda v: _fmt_value(v, "{:,.2f}")),
-        ("Dividend Yield", info.get("dividendYield"), lambda v: f"{float(v)*100:,.2f}%"),
-    ]
-    visible_cards = [c for c in cards if _to_number(c[1]) is not None]
-    if visible_cards:
-        cols = st.columns(len(visible_cards))
-        for col, (label, value, fmtfn) in zip(cols, visible_cards):
-            col.metric(label, fmtfn(value))
+    name = info.get("longName") or cand
+    st.subheader(f"{name} ({cand})")
+    c_price, c_beta = st.columns(2)
+    c_price.metric("Precio actual", _fmt_value(price_now))
+    c_beta.metric("Beta", _fmt_value(info.get("beta"), "{:,.2f}"))
 
-    details_cols = st.columns([2, 1])
-    with details_cols[0]:
-        desc = info.get("longBusinessSummary", "")
-        if desc:
-            st.markdown("#### Descripción breve")
-            st.write(desc[:800] + ("…" if len(desc) > 800 else ""))
-        fundamentals = []
-        for lbl, key in (
-            ("Payout Ratio", "payoutRatio"),
-            ("Revenue TTM", "revenue"),
-            ("Revenue Growth", "revenueGrowth"),
-            ("EPS TTM", "trailingEps"),
-            ("EPS Growth", "earningsGrowth"),
-            ("Gross Margin", "grossMargins"),
-            ("Operating Margin", "operatingMargins"),
-            ("Profit Margin", "profitMargins"),
-            ("Total Cash", "totalCash"),
-            ("Total Debt", "totalDebt"),
-            ("Quick Ratio", "quickRatio"),
-            ("Current Ratio", "currentRatio"),
-        ):
-            val = info.get(key)
-            if val is None:
-                continue
-            if "Margin" in lbl or "Growth" in lbl or "Yield" in lbl or "Ratio" in lbl:
-                fundamentals.append(f"**{lbl}:** {_fmt_value(val, '{:,.2%}')}")
-            elif "Cash" in lbl or "Debt" in lbl or "Revenue" in lbl:
-                fundamentals.append(f"**{lbl}:** {_fmt_cap(val)}")
-            else:
-                fundamentals.append(f"**{lbl}:** {_fmt_value(val)}")
-        if fundamentals:
-            st.markdown("#### Indicadores clave")
-            st.markdown("  \n".join(fundamentals))
-    with details_cols[1]:
-        st.markdown(
-            f"**Sector:** {_fmt_text(info.get('sector'))}  \n"
-            f"**Industria:** {_fmt_text(info.get('industry'))}  \n"
-            f"**País:** {_fmt_text(info.get('country'))}"
-        )
-        if info.get("website"):
-            st.markdown(f"[Sitio oficial]({info.get('website')})")
+    fundamentals_data = []
+    for lbl, key, fmt_fn in (
+        ("Cap. de mercado", "market_cap", _fmt_cap),
+        ("PE (TTM)", "trailingPE", lambda v: _fmt_value(v, "{:,.2f}")),
+        ("PE (forward)", "forwardPE", lambda v: _fmt_value(v, "{:,.2f}")),
+        ("Dividend Yield", "dividendYield", _fmt_percent),
+        ("Payout Ratio", "payoutRatio", _fmt_percent),
+        ("Revenue TTM", "revenue", _fmt_cap),
+        ("Revenue Growth", "revenueGrowth", _fmt_percent),
+        ("EPS TTM", "trailingEps", lambda v: _fmt_value(v, "{:,.2f}")),
+        ("EPS Growth", "earningsGrowth", _fmt_percent),
+        ("Gross Margin", "grossMargins", _fmt_percent),
+        ("Operating Margin", "operatingMargins", _fmt_percent),
+        ("Profit Margin", "profitMargins", _fmt_percent),
+        ("Total Cash", "totalCash", _fmt_cap),
+        ("Total Debt", "totalDebt", _fmt_cap),
+        ("Quick Ratio", "quickRatio", lambda v: _fmt_value(v, "{:,.2f}")),
+        ("Current Ratio", "currentRatio", lambda v: _fmt_value(v, "{:,.2f}")),
+    ):
+        val = fmt_fn(info.get(key)) if info.get(key) is not None else None
+        if val and val != "—":
+            fundamentals_data.append((lbl, val))
 
-    # Gráfico Candidate vs SPY
+    description_text = info.get("longBusinessSummary", "")
+    geo_lines = []
+    for label, key in (("Sector", "sector"), ("Industria", "industry"), ("País", "country")):
+        val = _clean_text(info.get(key))
+        if val:
+            geo_lines.append(f"**{label}:** {val}")
+    if info.get("website"):
+        geo_lines.append(f"[Sitio oficial]({info.get('website')})")
+
+    if start_date and prices_master is not None and not prices_master.empty:
+        port_prices = prices_master.loc[pd.Timestamp(start_date) :]
+    else:
+        port_prices = prices_master.copy()
+
+    last_map = st.session_state.get("last_map_master", {})
+    pos_df = positions_from_tx(tx_df, last_hint_map=last_map)
+    tot_mv = pos_df["MarketValue"].fillna(0).sum()
+
+    port_ret_now = pd.Series(dtype=float)
+    port_ret_new = pd.Series(dtype=float)
+    cand_ret = pd.Series(dtype=float)
+    bench_series = pd.Series(dtype=float)
+    curve = pd.DataFrame()
+    cand_weight = 0.0
+
+    if (
+        port_prices is not None
+        and not port_prices.empty
+        and tot_mv > 0
+        and port_prices.shape[0] >= 2
+        and price_now is not None
+    ):
+        rets = port_prices.pct_change().dropna(how="all")
+        weights = (pos_df.set_index("Ticker")["MarketValue"] / tot_mv) if tot_mv > 0 else pd.Series(dtype=float)
+        wv = weights.reindex(rets.columns).fillna(0.0).values
+        port_ret_now = (rets * wv).sum(axis=1).dropna()
+
+        sim_start = port_prices.index[0].strftime("%Y-%m-%d")
+        cand_hist = ensure_prices([cand], sim_start, persist=True)
+        if cand_hist is not None and not cand_hist.empty and cand in cand_hist.columns:
+            cand_px = cand_hist[cand].reindex(port_prices.index).ffill()
+            cand_ret = cand_px.pct_change().reindex(port_ret_now.index).fillna(0.0)
+
+        total_after = tot_mv + investment_sim
+        if total_after > 0 and investment_sim > 0 and not cand_ret.empty:
+            cand_weight = investment_sim / total_after
+            current_scale = tot_mv / total_after
+        else:
+            cand_weight = 0.0
+            current_scale = 1.0
+        port_ret_new = port_ret_now * current_scale + cand_ret * cand_weight
+
+        if bench_has_prices:
+            bench_px = bench_prices.reindex(port_prices.index).ffill()
+            bench_series = bench_px.pct_change().dropna()
+
+        curve = pd.DataFrame(
+            {
+                "Actual": (1 + port_ret_now).cumprod(),
+                "Con candidato": (1 + port_ret_new).cumprod(),
+            }
+        ).dropna(how="all")
+
     st.markdown("### 📊 Precio normalizado")
     if cand_has_prices and bench_has_prices:
         norm = pxdf[[cand, chart_benchmark]].ffill()
@@ -349,77 +375,17 @@ def render_candidate_page(window: str) -> None:
     else:
         st.info("No se pudo graficar la comparación normalizada por falta de datos completos.")
 
-    # Simulación de portafolio
-    tx_df = st.session_state["tx_master"]
-    prices_all = st.session_state["prices_master"]
-    if start_date and prices_all is not None and not prices_all.empty:
-        prices = prices_all.loc[pd.Timestamp(start_date) :]
-    else:
-        prices = prices_all.copy()
-
-    last_map = st.session_state.get("last_map_master", {})
-    pos_df = positions_from_tx(tx_df, last_hint_map=last_map)
-    tot_mv = pos_df["MarketValue"].fillna(0).sum()
-
-    st.markdown("### 🧪 Impacto en el portafolio")
-    if (
-        prices is None
-        or prices.empty
-        or tot_mv <= 0
-        or prices.shape[0] < 2
-        or price_now is None
-    ):
-        st.info("Necesito precios del portafolio, del candidato y un valor razonable del portafolio para simular.")
-        port_ret_now = pd.Series(dtype=float)
-        port_ret_new = pd.Series(dtype=float)
-        bench_series = pd.Series(dtype=float)
-        cand_ret = pd.Series(dtype=float)
-    else:
-        rets = prices.pct_change().dropna(how="all")
-        weight_series = (
-            (pos_df.set_index("Ticker")["MarketValue"] / tot_mv)
-            if tot_mv > 0
-            else pd.Series(dtype=float)
+    st.markdown("### 📈 Portafolio actual vs simulado")
+    st.caption(
+        f"Acciones simuladas: **{shares_to_simulate:,.2f}** | Inversión: **${investment_sim:,.2f}** | Peso estimado: **{(cand_weight*100):,.2f}%**"
+    )
+    if not curve.empty:
+        st.plotly_chart(
+            px.line(curve, title="Evolución del portafolio (base = 1.0)"),
+            use_container_width=True,
         )
-        wv = weight_series.reindex(rets.columns).fillna(0.0).values
-        port_ret_now = (rets * wv).sum(axis=1).dropna()
-
-        sim_start = prices.index[0].strftime("%Y-%m-%d")
-        cand_hist = ensure_prices([cand], sim_start, persist=True)
-        cand_ret = pd.Series(dtype=float)
-        if cand_hist is not None and not cand_hist.empty and cand in cand_hist.columns:
-            cand_px = cand_hist[cand].reindex(prices.index).ffill()
-            cand_ret = cand_px.pct_change().reindex(port_ret_now.index).fillna(0.0)
-
-        total_after = tot_mv + investment_sim
-        if total_after > 0 and investment_sim > 0 and not cand_ret.empty:
-            current_scale = tot_mv / total_after
-            cand_weight = investment_sim / total_after
-        else:
-            current_scale = 1.0
-            cand_weight = 0.0
-        port_ret_new = port_ret_now * current_scale + cand_ret * cand_weight
-
-        bench_series = pd.Series(dtype=float)
-        if bench_has_prices:
-            bench_px = bench_prices.reindex(prices.index).ffill()
-            bench_series = bench_px.pct_change().dropna()
-
-        st.caption(
-            f"Acciones simuladas: **{shares_to_simulate:,.2f}** | Inversión: **${investment_sim:,.2f}** | Peso estimado: **{(cand_weight*100):,.2f}%**"
-        )
-
-        curve = pd.DataFrame(
-            {
-                "Actual": (1 + port_ret_now).cumprod(),
-                "Con candidato": (1 + port_ret_new).cumprod(),
-            }
-        ).dropna(how="all")
-        if not curve.empty:
-            st.plotly_chart(
-                px.line(curve, title="Evolución del portafolio (base=1.0)"),
-                use_container_width=True,
-            )
+    else:
+        st.info("No hay suficiente histórico para comparar el portafolio con y sin el candidato.")
 
     def _metrics_summary(ret_series, bench_series, rf):
         result = {
@@ -451,11 +417,19 @@ def render_candidate_page(window: str) -> None:
                 result["tracking_error"] = diff.std(ddof=0) * np.sqrt(252)
         return result
 
-    rf = get_setting(st.session_state["settings_master"], "RF", 0.03, float)
+    rf = get_setting(settings_df, "RF", 0.03, float)
     bench_for_base = bench_series.reindex(port_ret_now.index).dropna()
-    base_for_metrics = port_ret_now.reindex(bench_for_base.index).dropna() if not bench_for_base.empty else port_ret_now
+    base_for_metrics = (
+        port_ret_now.reindex(bench_for_base.index).dropna()
+        if not bench_for_base.empty
+        else port_ret_now
+    )
     bench_for_new = bench_series.reindex(port_ret_new.index).dropna()
-    new_for_metrics = port_ret_new.reindex(bench_for_new.index).dropna() if not bench_for_new.empty else port_ret_new
+    new_for_metrics = (
+        port_ret_new.reindex(bench_for_new.index).dropna()
+        if not bench_for_new.empty
+        else port_ret_new
+    )
 
     metrics_current = _metrics_summary(base_for_metrics, bench_for_base, rf)
     metrics_new = _metrics_summary(new_for_metrics, bench_for_new, rf)
@@ -469,51 +443,176 @@ def render_candidate_page(window: str) -> None:
         if not aligned_corr_new.empty:
             corr_new = aligned_corr_new.corr().iloc[0, 1]
 
-    rows = []
+    st.markdown("### 📋 Métricas del portafolio")
     metric_rows = [
-        ("Rendimiento anualizado", "ret", True),
-        ("Volatilidad anualizada", "vol", True),
-        ("Sharpe", "sharpe", False),
-        ("Sortino", "sortino", False),
-        ("Max Drawdown", "mdd", True),
-        ("Calmar", "calmar", False),
-        ("Beta vs SPY", "beta", False),
-        ("Tracking Error", "tracking_error", True),
+        ("Rendimiento anualizado", "ret", True, True),
+        ("Volatilidad anualizada", "vol", True, False),
+        ("Sharpe", "sharpe", False, True),
+        ("Sortino", "sortino", False, True),
+        ("Max Drawdown", "mdd", True, False),
+        ("Calmar", "calmar", False, True),
+        ("Beta vs SPY", "beta", False, None),
+        ("Tracking Error", "tracking_error", True, False),
     ]
-    for label, key, is_pct in metric_rows:
+
+    metrics_data = []
+    for label, key, is_pct, better_high in metric_rows:
         cur = metrics_current.get(key)
         new = metrics_new.get(key)
-        if cur is None and new is None:
-            continue
-        fmt = "{:,.2f}%" if is_pct else "{:,.2f}"
-        rows.append(
+        delta = (
+            new - cur
+            if cur is not None
+            and not np.isnan(cur)
+            and new is not None
+            and not np.isnan(new)
+            else np.nan
+        )
+        metrics_data.append(
             {
                 "Métrica": label,
-                "Actual": "—" if cur is None or np.isnan(cur) else fmt.format(cur * 100 if is_pct else cur),
-                "Con candidato": "—" if new is None or np.isnan(new) else fmt.format(new * 100 if is_pct else new),
-                "Δ": "—"
-                if cur is None or new is None or np.isnan(cur) or np.isnan(new)
-                else fmt.format((new - cur) * 100 if is_pct else (new - cur)),
+                "ActualValue": cur,
+                "NewValue": new,
+                "Delta": delta,
+                "is_pct": is_pct,
+                "better_high": better_high,
             }
         )
-    rows.append(
+
+    metrics_data.append(
         {
             "Métrica": "Correlación candidato-portafolio",
-            "Actual": "—" if np.isnan(corr_current) else f"{corr_current:,.2f}",
-            "Con candidato": "—" if np.isnan(corr_new) else f"{corr_new:,.2f}",
-            "Δ": "—"
-            if np.isnan(corr_current) or np.isnan(corr_new)
-            else f"{(corr_new - corr_current):,.2f}",
+            "ActualValue": corr_current,
+            "NewValue": corr_new,
+            "Delta": (
+                corr_new - corr_current
+                if not np.isnan(corr_current) and not np.isnan(corr_new)
+                else np.nan
+            ),
+            "is_pct": False,
+            "better_high": None,
         }
     )
-    if rows:
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+
+    df_metrics = pd.DataFrame(metrics_data)
+
+    def _format_metric(val, is_pct):
+        if val is None or np.isnan(val):
+            return "—"
+        return f"{val * 100:,.2f}%" if is_pct else f"{val:,.2f}"
+
+    if not df_metrics.empty:
+        display_df = pd.DataFrame(
+            {
+                "Métrica": df_metrics["Métrica"],
+                "Actual": [
+                    _format_metric(v, pct)
+                    for v, pct in zip(df_metrics["ActualValue"], df_metrics["is_pct"])
+                ],
+                "Con candidato": [
+                    _format_metric(v, pct)
+                    for v, pct in zip(df_metrics["NewValue"], df_metrics["is_pct"])
+                ],
+                "Δ": [
+                    _format_metric(v, pct)
+                    for v, pct in zip(df_metrics["Delta"], df_metrics["is_pct"])
+                ],
+            }
+        )
+
+        def _delta_style(row):
+            idx = row.name
+            better = df_metrics.loc[idx, "better_high"]
+            delta_val = df_metrics.loc[idx, "Delta"]
+            if better is None or delta_val is None or np.isnan(delta_val):
+                return [""]
+            improved = delta_val >= 0 if better else delta_val <= 0
+            color = "#22c55e" if improved else "#ef4444"
+            return [f"color: {color}; font-weight:bold;"]
+
+        styled = display_df.style.apply(_delta_style, subset=["Δ"], axis=1)
+        st.dataframe(styled, use_container_width=True)
     else:
         st.info("No pude calcular métricas del portafolio para este escenario.")
 
-    # Expander para registrar en Sheets
+    if description_text or fundamentals_data or geo_lines:
+        st.markdown("### 🧾 Resumen fundamental")
+        if description_text:
+            st.write(description_text[:800] + ("…" if len(description_text) > 800 else ""))
+        if geo_lines:
+            st.markdown("  \n".join(geo_lines))
+        if fundamentals_data:
+            cols = st.columns(min(3, len(fundamentals_data)))
+            for idx, (label, value) in enumerate(fundamentals_data):
+                with cols[idx % len(cols)]:
+                    st.markdown(f"**{label}:** {value}")
+
     with st.expander("🧾 Registrar esta acción en mi portafolio"):
-        st.caption("La siguiente operación se escribirá en la hoja *Transactions*.")
+        st.caption("Esta operación se agregará a la hoja *Transactions* respetando su estructura.")
+        ws = open_ws("Transactions")
+        values = ws.get_all_values() or []
+        default_headers = [
+            "TradeID",
+            "Account",
+            "Ticker",
+            "Name",
+            "AssetType",
+            "Currency",
+            "TradeDate",
+            "Side",
+            "Shares",
+            "Price",
+            "Fees",
+            "Taxes",
+            "FXRate",
+            "GrossAmount",
+            "NetAmount",
+            "LotID",
+            "Source",
+            "Notes",
+        ]
+        headers = values[0] if values else default_headers
+
+        def _norm_header(h: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", h.lower())
+
+        header_norm = [_norm_header(h) for h in headers]
+        col_index = {name: idx for idx, name in enumerate(header_norm)}
+
+        def sample_value(col_name: str, default=""):
+            idx = col_index.get(_norm_header(col_name))
+            if idx is None:
+                return default
+            for row in values[1:]:
+                if len(row) > idx and row[idx]:
+                    return row[idx]
+            return default
+
+        trade_idx = col_index.get("tradeid")
+        trade_ids = []
+        if trade_idx is not None:
+            for row in values[1:]:
+                if len(row) > trade_idx:
+                    try:
+                        trade_ids.append(int(float(row[trade_idx])))
+                    except Exception:
+                        continue
+        next_trade_id = (max(trade_ids) if trade_ids else 0) + 1
+
+        lot_idx = col_index.get("lotid")
+        lot_numbers = []
+        if lot_idx is not None:
+            for row in values[1:]:
+                if len(row) > lot_idx:
+                    match = re.findall(r"\d+", row[lot_idx])
+                    if match:
+                        lot_numbers.append(int(match[-1]))
+        next_lot_id = (max(lot_numbers) if lot_numbers else 0) + 1
+
+        account_default = sample_value("Account", "Cuenta Principal")
+        asset_type_default = sample_value("AssetType", "Stock")
+        currency_default = sample_value("Currency", "USD")
+        source_default = sample_value("Source", "manual")
+
         with st.form("register_candidate_trade"):
             today = datetime.utcnow().date()
             trade_date = st.date_input("Fecha de compra", value=today)
@@ -529,44 +628,51 @@ def render_candidate_page(window: str) -> None:
                 value=float(price_now or 0),
                 step=0.01,
             )
-            note = st.text_input("Nota (opcional)")
+            fees_input = st.number_input("Comisiones", min_value=0.0, value=0.0, step=0.01)
+            taxes_input = st.number_input("Impuestos", min_value=0.0, value=0.0, step=0.01)
+            note = st.text_input("Nota (opcional)", value="")
             submitted = st.form_submit_button("Agregar al portafolio")
+
             if submitted:
                 if shares_real <= 0:
                     st.error("Necesito una cantidad de acciones mayor que cero.")
                 elif price_entry <= 0:
                     st.error("El precio debe ser mayor que cero.")
+                elif not headers:
+                    st.error("No encontré encabezados válidos en la hoja Transactions.")
                 else:
+                    gross_amount = shares_real * price_entry
+                    net_amount = gross_amount - fees_input - taxes_input
+
+                    row_out = [""] * len(headers)
+
+                    def set_field(col_name: str, value):
+                        idx = col_index.get(_norm_header(col_name))
+                        if idx is not None and idx < len(row_out):
+                            row_out[idx] = value
+
+                    set_field("TradeID", str(next_trade_id))
+                    set_field("Account", account_default)
+                    set_field("Ticker", cand)
+                    set_field("Name", info.get("longName") or cand)
+                    set_field("AssetType", asset_type_default)
+                    set_field("Currency", currency_default)
+                    set_field("TradeDate", trade_date.isoformat())
+                    set_field("Side", "Buy")
+                    set_field("Shares", shares_real)
+                    set_field("Price", price_entry)
+                    set_field("Fees", fees_input)
+                    set_field("Taxes", taxes_input)
+                    set_field("FXRate", 1.0)
+                    set_field("GrossAmount", gross_amount)
+                    set_field("NetAmount", net_amount)
+                    set_field("LotID", f"L{next_lot_id}")
+                    set_field("Source", source_default)
+                    set_field("Notes", note)
+
                     try:
-                        ws = open_ws("Transactions")
-                        headers = st.session_state["tx_master"].columns.tolist()
-                        if not headers:
-                            headers = ws.row_values(1)
-                        row = []
-                        for col in headers:
-                            col_norm = col.strip().lower()
-                            if col_norm == "tradedate":
-                                row.append(trade_date.isoformat())
-                            elif col_norm == "ticker":
-                                row.append(cand)
-                            elif col_norm == "side":
-                                row.append("BUY")
-                            elif col_norm == "shares":
-                                row.append(shares_real)
-                            elif col_norm == "price":
-                                row.append(price_entry)
-                            elif col_norm in {"notes", "nota"}:
-                                row.append(note)
-                            elif col_norm in {"sector"}:
-                                row.append(_fmt_text(info.get("sector")) or "")
-                            elif col_norm in {"industry"}:
-                                row.append(_fmt_text(info.get("industry")) or "")
-                            elif col_norm in {"country"}:
-                                row.append(_fmt_text(info.get("country")) or "")
-                            else:
-                                row.append("")
-                        ws.append_row(row, value_input_option="USER_ENTERED")
+                        ws.append_row(row_out, value_input_option="USER_ENTERED")
                     except Exception as exc:
                         st.error(f"No pude registrar la compra: {exc}")
                     else:
-                        st.success("Se registró la operación. Refresca el portafolio para verla reflejada.")
+                        st.success("Se registró la operación. Refresca 'Mi Portafolio' para verla reflejada.")
