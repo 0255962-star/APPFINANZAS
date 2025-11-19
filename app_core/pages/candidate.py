@@ -81,105 +81,55 @@ def get_company_info(ticker: str):
     t = yf.Ticker(ticker)
     info = {}
 
-    def _safe_data(attr_name, fallback_attrs=()):
-        for attr in (attr_name, *fallback_attrs):
-            try:
-                data = getattr(t, attr, {}) or {}
-                if callable(data):
-                    data = data()
-                if data:
-                    return data
-            except Exception:
-                continue
-        return {}
-
-    price_data = _safe_data("price", ("info",))
-    profile_data = _safe_data("summary_profile", ("profile", "info"))
-    summary_data = _safe_data("summary_detail", ("info",))
-    if not summary_data:
-        summary_data = {}
-    stats_data = _safe_data("key_stats", ("key_stats", "info"))
-
-    info.update(
-        {
-            "longName": _clean_text(price_data.get("longName") or price_data.get("shortName")),
-            "last_price": _to_number(price_data.get("regularMarketPrice")),
-            "market_cap": _to_number(price_data.get("marketCap"))
-            or _to_number(summary_data.get("marketCap")),
-            "beta": _to_number(stats_data.get("beta"))
-            or _to_number(price_data.get("beta")),
-            "trailingPE": _to_number(summary_data.get("trailingPE")),
-            "forwardPE": _to_number(summary_data.get("forwardPE")),
-            "dividendYield": _to_number(summary_data.get("dividendYield")),
-            "sector": _clean_text(profile_data.get("sector")),
-            "industry": _clean_text(profile_data.get("industry")),
-            "country": _clean_text(profile_data.get("country")),
-            "website": _clean_text(profile_data.get("website")),
-            "longBusinessSummary": _clean_text(profile_data.get("longBusinessSummary")),
-        }
-    )
     try:
-        gi = t.get_info()
+        fast = getattr(t, "fast_info", {}) or {}
     except Exception:
-        gi = {}
+        fast = {}
+
+    info["last_price"] = _to_number(fast.get("last_price") or fast.get("lastPrice"))
+    info["market_cap"] = _to_number(fast.get("market_cap") or fast.get("marketCap"))
+    info["beta"] = _to_number(fast.get("beta"))
+
+    try:
+        base = t.get_info() or {}
+    except Exception:
         try:
-            gi = getattr(t, "info", {}) or {}
+            base = getattr(t, "info", {}) or {}
         except Exception:
-            gi = {}
-    if gi:
-        def _fill(target, names, numeric=True):
-            if info.get(target) not in (None, "", 0):
-                return
-            for name in names:
-                val = gi.get(name)
-                use_val = _to_number(val) if numeric else _clean_text(val)
-                if use_val not in (None, ""):
-                    info[target] = use_val
-                    return
+            base = {}
 
-        _fill("longName", ("longName", "shortName"), numeric=False)
-        _fill("last_price", ("regularMarketPrice", "previousClose"))
-        _fill("market_cap", ("marketCap",))
-        _fill("beta", ("beta",))
-        _fill("trailingPE", ("trailingPE",))
-        _fill("forwardPE", ("forwardPE",))
-        _fill("dividendYield", ("dividendYield", "trailingAnnualDividendYield"))
-        _fill("sector", ("sector",), numeric=False)
-        _fill("industry", ("industry",), numeric=False)
-        _fill("country", ("country",), numeric=False)
-        _fill("website", ("website", "websiteUrl"), numeric=False)
-        _fill("longBusinessSummary", ("longBusinessSummary",), numeric=False)
-    try:
-        fast_obj = getattr(t, "fast_info", None)
-    except Exception:
-        fast_obj = None
-
-    def _fast_fetch(names):
-        if fast_obj is None:
-            return None
-        for name in names:
-            try:
-                if isinstance(fast_obj, dict) and name in fast_obj:
-                    return fast_obj.get(name)
-                val = getattr(fast_obj, name, None)
-                if val is not None:
-                    return val
-            except Exception:
-                continue
-        return None
-
-    # FIX: yfinance cambió los nombres en fast_info (snake_case vs camelCase).
-    fast_map = {
-        "last_price": ("last_price", "lastPrice"),
-        "market_cap": ("market_cap", "marketCap"),
-        "beta": ("beta",),
-    }
-    for target, candidates in fast_map.items():
-        if target not in info:
-            val = _fast_fetch(candidates)
+    def _fill_numeric(key, *candidates):
+        if info.get(key) is not None:
+            return
+        for name in candidates:
+            val = _to_number(base.get(name))
             if val is not None:
-                info[target] = val
-    return info or {}
+                info[key] = val
+                return
+
+    def _fill_text(key, *candidates):
+        if info.get(key):
+            return
+        for name in candidates:
+            val = _clean_text(base.get(name))
+            if val:
+                info[key] = val
+                return
+
+    _fill_text("longName", "longName", "shortName")
+    _fill_numeric("last_price", "regularMarketPrice", "currentPrice", "previousClose")
+    _fill_numeric("market_cap", "marketCap")
+    _fill_numeric("beta", "beta")
+    _fill_numeric("trailingPE", "trailingPE")
+    _fill_numeric("forwardPE", "forwardPE")
+    _fill_numeric("dividendYield", "dividendYield", "trailingAnnualDividendYield")
+    _fill_text("sector", "sector")
+    _fill_text("industry", "industry")
+    _fill_text("country", "country")
+    _fill_text("website", "website", "websiteUrl")
+    _fill_text("longBusinessSummary", "longBusinessSummary")
+
+    return info
 
 
 def render_candidate_page(window: str) -> None:
