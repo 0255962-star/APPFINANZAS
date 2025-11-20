@@ -61,6 +61,25 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
     t = yf.Ticker(ticker)
     info: Dict = {}
 
+    def _alpha_overview(symbol: str) -> Dict:
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        if not api_key:
+            return {}
+        try:
+            resp = requests.get(
+                "https://www.alphavantage.co/query",
+                params={
+                    "function": "OVERVIEW",
+                    "symbol": symbol,
+                    "apikey": api_key,
+                },
+                timeout=10,
+            )
+            payload = resp.json() if resp.ok else {}
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
     def _from_fast(key):
         try:
             fast = getattr(t, "fast_info", None)
@@ -88,13 +107,16 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
                 return base.get(key)
         return None
 
+    overview = _alpha_overview(ticker)
+
     info["longName"] = _from_info("longName") or _from_info("shortName")
     info["symbol"] = ticker.upper()
-    info["currency"] = _from_fast("currency") or _from_info("currency")
+    info["currency"] = _from_fast("currency") or _from_info("currency") or overview.get("Currency")
     info["regularMarketPrice"] = (
         _from_fast("last_price")
         or _from_fast("lastPrice")
         or _from_info("regularMarketPrice", "currentPrice")
+        or _safe_number(overview.get("50DayMovingAverage"))
     )
     info["regularMarketPreviousClose"] = _from_fast("previousClose") or _from_info(
         "previousClose"
@@ -102,28 +124,50 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
     info["regularMarketChangePercent"] = _from_fast("regularMarketChangePercent") or _from_info(
         "regularMarketChangePercent"
     )
-    info["marketCap"] = _from_fast("marketCap") or _from_info("marketCap")
-    info["sector"] = _from_info("sector")
-    info["industry"] = _from_info("industry")
-    info["country"] = _from_info("country")
+    info["marketCap"] = _from_fast("marketCap") or _from_info("marketCap") or _safe_number(
+        overview.get("MarketCapitalization")
+    )
+    info["sector"] = _from_info("sector") or overview.get("Sector")
+    info["industry"] = _from_info("industry") or overview.get("Industry")
+    info["country"] = _from_info("country") or overview.get("Country")
     info["logo_url"] = _from_info("logo_url")
-    info["fiftyTwoWeekLow"] = _from_fast("yearLow") or _from_info("fiftyTwoWeekLow")
-    info["fiftyTwoWeekHigh"] = _from_fast("yearHigh") or _from_info("fiftyTwoWeekHigh")
+    info["fiftyTwoWeekLow"] = (
+        _from_fast("yearLow")
+        or _from_info("fiftyTwoWeekLow")
+        or _safe_number(overview.get("52WeekLow"))
+    )
+    info["fiftyTwoWeekHigh"] = (
+        _from_fast("yearHigh")
+        or _from_info("fiftyTwoWeekHigh")
+        or _safe_number(overview.get("52WeekHigh"))
+    )
     info["averageVolume"] = _from_fast("tenDayAverageVolume") or _from_info(
         "averageVolume"
     )
-    info["trailingPE"] = _from_info("trailingPE")
-    info["forwardPE"] = _from_info("forwardPE")
+    info["trailingPE"] = _from_info("trailingPE") or _safe_number(overview.get("PERatio"))
+    info["forwardPE"] = _from_info("forwardPE") or _safe_number(overview.get("ForwardPE"))
     info["dividendYield"] = _from_info("dividendYield") or _from_info(
         "trailingAnnualDividendYield"
     )
-    info["pegRatio"] = _from_info("pegRatio")
-    info["priceToBook"] = _from_info("priceToBook")
-    info["operatingMargins"] = _from_info("operatingMargins")
-    info["profitMargins"] = _from_info("profitMargins")
-    info["returnOnEquity"] = _from_info("returnOnEquity")
-    info["returnOnAssets"] = _from_info("returnOnAssets")
-    info["debtToEquity"] = _from_info("debtToEquity")
+    if info.get("dividendYield") is None:
+        info["dividendYield"] = _safe_number(overview.get("DividendYield"))
+    info["pegRatio"] = _from_info("pegRatio") or _safe_number(overview.get("PEGRatio"))
+    info["priceToBook"] = _from_info("priceToBook") or _safe_number(overview.get("PriceToBookRatio"))
+    info["operatingMargins"] = _from_info("operatingMargins") or _safe_number(
+        overview.get("OperatingMarginTTM")
+    )
+    info["profitMargins"] = _from_info("profitMargins") or _safe_number(
+        overview.get("ProfitMargin")
+    )
+    info["returnOnEquity"] = _from_info("returnOnEquity") or _safe_number(
+        overview.get("ReturnOnEquityTTM")
+    )
+    info["returnOnAssets"] = _from_info("returnOnAssets") or _safe_number(
+        overview.get("ReturnOnAssetsTTM")
+    )
+    info["debtToEquity"] = _from_info("debtToEquity") or _safe_number(
+        overview.get("DebtToEquity")
+    )
 
     if _safe_number(info.get("regularMarketPrice")) is None:
         api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
@@ -440,6 +484,16 @@ def render_research_page(window: str) -> None:
             f"No se pudo obtener información para el ticker {ticker.upper()}. Verifica que esté bien escrito."
         )
         return
+
+    # Enrich snapshot with history-based fallbacks when API responses omit metadata.
+    if hist is not None and isinstance(hist, pd.DataFrame) and not hist.empty:
+        if _safe_number(info.get("averageVolume")) is None and "Volume" in hist.columns:
+            info["averageVolume"] = _safe_number(hist["Volume"].tail(60).mean())
+        if _safe_number(info.get("fiftyTwoWeekLow")) is None or _safe_number(info.get("fiftyTwoWeekHigh")) is None:
+            last_year = hist.loc[hist.index >= (hist.index.max() - timedelta(days=365))]
+            if not last_year.empty and "AdjClose" in last_year.columns:
+                info.setdefault("fiftyTwoWeekLow", _safe_number(last_year["AdjClose"].min()))
+                info.setdefault("fiftyTwoWeekHigh", _safe_number(last_year["AdjClose"].max()))
 
     _render_snapshot_card(info)
 
