@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
+import requests
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -122,11 +124,77 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
     info["returnOnEquity"] = _from_info("returnOnEquity")
     info["returnOnAssets"] = _from_info("returnOnAssets")
     info["debtToEquity"] = _from_info("debtToEquity")
+
+    if _safe_number(info.get("regularMarketPrice")) is None:
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        if api_key:
+            try:
+                resp = requests.get(
+                    "https://www.alphavantage.co/query",
+                    params={
+                        "function": "GLOBAL_QUOTE",
+                        "symbol": ticker,
+                        "apikey": api_key,
+                    },
+                    timeout=10,
+                )
+                quote = resp.json().get("Global Quote", {})
+                last = _safe_number(quote.get("05. price"))
+                prev = _safe_number(quote.get("08. previous close"))
+                if last is not None:
+                    info["regularMarketPrice"] = last
+                if prev is not None:
+                    info["regularMarketPreviousClose"] = prev
+                if info.get("currency") is None:
+                    info["currency"] = "USD"
+            except Exception:
+                pass
     return info
 
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(ticker: str, start: Optional[str]):
+    def _alpha_history(symbol: str) -> pd.DataFrame:
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        if not api_key:
+            return pd.DataFrame()
+        try:
+            resp = requests.get(
+                "https://www.alphavantage.co/query",
+                params={
+                    "function": "TIME_SERIES_DAILY_ADJUSTED",
+                    "symbol": symbol,
+                    "outputsize": "compact",
+                    "apikey": api_key,
+                },
+                timeout=15,
+            )
+            data = resp.json().get("Time Series (Daily)", {})
+        except Exception:
+            return pd.DataFrame()
+        if not data:
+            return pd.DataFrame()
+
+        records = []
+        for date_str, vals in data.items():
+            try:
+                records.append(
+                    {
+                        "Date": datetime.strptime(date_str, "%Y-%m-%d"),
+                        "AdjClose": float(vals.get("5. adjusted close", "nan")),
+                        "Close": float(vals.get("4. close", "nan")),
+                        "Volume": float(vals.get("6. volume", 0)),
+                    }
+                )
+            except Exception:
+                continue
+        if not records:
+            return pd.DataFrame()
+
+        df_alpha = pd.DataFrame(records).set_index("Date").sort_index()
+        df_alpha.attrs["currency"] = "USD"
+        return df_alpha
+
     try:
         df = yf.download(
             ticker,
@@ -142,7 +210,10 @@ def fetch_history(ticker: str, start: Optional[str]):
         if df.empty:
             df = yf.Ticker(ticker).history(period="max", auto_adjust=False)
     except Exception:
-        return pd.DataFrame()
+        df = pd.DataFrame()
+
+    if df.empty:
+        df = _alpha_history(ticker)
     if df.empty:
         return df
 
