@@ -617,37 +617,10 @@ def render_candidate_page(window: str) -> None:
         if not api_key:
             return "No encontré la clave de Claude en los secrets."
 
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-            "accept": "application/json",
-        }
-        payload = {
-            "model": "claude-3-sonnet-20240229",
-            "max_tokens": 600,
-            "temperature": 0.3,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt,
-                        }
-                    ],
-                }
-            ],
-        }
+        preferred_model = st.secrets.get("CLAUDE_MODEL", "claude-3-sonnet-20240229")
+        fallback_model = "claude-3-haiku-20240307"
 
-        try:
-            resp = requests.post(
-                "https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=30
-            )
-        except Exception as exc:  # pragma: no cover - network guarded
-            return f"No pude obtener la opinión de IA. Detalle técnico: {exc}"
-
-        if resp.status_code >= 400:
+        def _parse_error(resp):
             detail = None
             try:
                 detail_data = resp.json()
@@ -657,15 +630,61 @@ def render_candidate_page(window: str) -> None:
                         detail = err_obj.get("message") or err_obj.get("type")
             except Exception:
                 detail = resp.text or None
-            friendly = detail or "Inténtalo de nuevo en unos minutos."
-            return f"No pude obtener la opinión de IA (código {resp.status_code}). {friendly}"
+            return detail or "Inténtalo de nuevo en unos minutos."
 
-        try:
-            data = resp.json()
-        except Exception as exc:  # pragma: no cover - network guarded
-            return f"No pude interpretar la respuesta de IA. Detalle técnico: {exc}"
+        def _attempt(model_name: str):
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "accept": "application/json",
+                "anthropic-beta": "messages-2023-12-15",
+            }
+            payload = {
+                "model": model_name,
+                "max_tokens": 600,
+                "temperature": 0.3,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt,
+                            }
+                        ],
+                    }
+                ],
+            }
 
-        content = data.get("content")
+            try:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+            except Exception as exc:  # pragma: no cover - network guarded
+                return None, f"No pude obtener la opinión de IA. Detalle técnico: {exc}"
+
+            if resp.status_code >= 400:
+                return None, _parse_error(resp)
+
+            try:
+                data = resp.json()
+            except Exception as exc:  # pragma: no cover - network guarded
+                return None, f"No pude interpretar la respuesta de IA. Detalle técnico: {exc}"
+            return data, None
+
+        data, err = _attempt(preferred_model)
+        if err and preferred_model != fallback_model:
+            # Reintenta con un modelo más liviano si el primero falla (por ejemplo 404/405 del endpoint).
+            data, err = _attempt(fallback_model)
+
+        if err:
+            return f"No pude obtener la opinión de IA. {err}"
+
+        content = data.get("content") if isinstance(data, dict) else None
         if isinstance(content, list) and content:
             blocks = []
             for block in content:
