@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
+import requests
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -573,6 +575,130 @@ def render_candidate_page(window: str) -> None:
         st.dataframe(styled, use_container_width=True)
     else:
         st.info("No pude calcular métricas del portafolio para este escenario.")
+
+    def get_recent_news_summary(ticker: str) -> str:
+        """Return a brief summary of recent news for ticker via Alpha Vantage."""
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        if not api_key:
+            return "No pude obtener la API key de Alpha Vantage."
+        url = "https://www.alphavantage.co/query"
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "apikey": api_key}
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # pragma: no cover - network guarded
+            return f"No pude consultar noticias: {exc}"
+
+        feed = data.get("feed", []) if isinstance(data, dict) else []
+        if not feed:
+            return "No encontré noticias recientes para este ticker."
+
+        summaries = []
+        sentiments = []
+        for item in feed[:5]:
+            title = item.get("title") or "Sin título"
+            source = item.get("source") or "Fuente desconocida"
+            summary = item.get("summary") or "Sin resumen"
+            overall = item.get("overall_sentiment_label") or "Neutral"
+            sentiments.append(overall)
+            summaries.append(f"• {title} ({source}) — {summary[:200]}{'…' if len(summary) > 200 else ''}")
+
+        sentiment_note = "Neutral"
+        if sentiments:
+            counts = {s: sentiments.count(s) for s in set(sentiments)}
+            sentiment_note = max(counts, key=counts.get)
+        summaries.append(f"Sentimiento predominante: {sentiment_note}")
+        return "\n".join(summaries)
+
+    def get_claude_opinion(prompt: str) -> str:
+        """Call Claude API with provided prompt and return text."""
+        api_key = st.secrets.get("CLAUDE_API_KEY")
+        if not api_key:
+            return "No encontré la clave de Claude en los secrets."
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": "claude-3-sonnet-20240229",
+            "max_tokens": 600,
+            "temperature": 0.3,
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        try:
+            resp = requests.post(
+                "https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=30
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data.get("content")
+            if isinstance(content, list) and content:
+                text = content[0].get("text")
+                if text:
+                    return text
+            if isinstance(content, str):
+                return content
+            return "No recibí texto de respuesta de Claude."
+        except Exception as exc:  # pragma: no cover - network guarded
+            return f"No pude obtener la opinión de IA: {exc}"
+
+    ia_container = st.container()
+    with ia_container:
+        if st.button("Opinión de IA"):
+            with st.spinner("Generando opinión de IA…"):
+                metric_lookup = {
+                    row["Métrica"]: (
+                        row.get("ActualValue"),
+                        row.get("NewValue"),
+                        row.get("Delta"),
+                        row.get("is_pct"),
+                    )
+                    for _, row in df_metrics.iterrows()
+                }
+
+                def _val_tuple(label):
+                    return metric_lookup.get(label, (np.nan, np.nan, np.nan, False))
+
+                def _fmt(num, is_pct=False):
+                    if num is None or (isinstance(num, float) and np.isnan(num)):
+                        return "N/D"
+                    return f"{num * 100:,.2f}%" if is_pct else f"{num:,.4f}"
+
+                rend_cur, rend_new, rend_d, rend_pct = _val_tuple("Rendimiento anualizado")
+                vol_cur, vol_new, vol_d, vol_pct = _val_tuple("Volatilidad anualizada")
+                sharpe_cur, sharpe_new, sharpe_d, _ = _val_tuple("Sharpe")
+                sortino_cur, sortino_new, sortino_d, _ = _val_tuple("Sortino")
+                mdd_cur, mdd_new, mdd_d, mdd_pct = _val_tuple("Max Drawdown")
+                calmar_cur, calmar_new, calmar_d, _ = _val_tuple("Calmar")
+                beta_cur, beta_new, beta_d, _ = _val_tuple("Beta vs SPY")
+                te_cur, te_new, te_d, te_pct = _val_tuple("Tracking Error")
+                corr_cur, corr_new, corr_d, _ = _val_tuple("Correlación candidato-portafolio")
+
+                news_summary = get_recent_news_summary(cand)
+
+                prompt = (
+                    "Eres un analista financiero con tono formal-casual para un estudiante mexicano de 7º semestre. "
+                    "Usa frases cortas y viñetas, con alguna palabra divertida ocasional. "
+                    "Analiza cómo el candidato cambia el portafolio usando EXCLUSIVAMENTE estas métricas:\n"
+                    f"- Rendimiento anualizado: actual {_fmt(rend_cur, rend_pct)}, con candidato {_fmt(rend_new, rend_pct)}, delta {_fmt(rend_d, rend_pct)}\n"
+                    f"- Volatilidad anualizada: actual {_fmt(vol_cur, vol_pct)}, con candidato {_fmt(vol_new, vol_pct)}, delta {_fmt(vol_d, vol_pct)}\n"
+                    f"- Sharpe: actual {_fmt(sharpe_cur)}, con candidato {_fmt(sharpe_new)}, delta {_fmt(sharpe_d)}\n"
+                    f"- Sortino: actual {_fmt(sortino_cur)}, con candidato {_fmt(sortino_new)}, delta {_fmt(sortino_d)}\n"
+                    f"- Max Drawdown: actual {_fmt(mdd_cur, mdd_pct)}, con candidato {_fmt(mdd_new, mdd_pct)}, delta {_fmt(mdd_d, mdd_pct)}\n"
+                    f"- Calmar: actual {_fmt(calmar_cur)}, con candidato {_fmt(calmar_new)}, delta {_fmt(calmar_d)}\n"
+                    f"- Beta vs SPY: actual {_fmt(beta_cur)}, con candidato {_fmt(beta_new)}, delta {_fmt(beta_d)}\n"
+                    f"- Tracking Error: actual {_fmt(te_cur, te_pct)}, con candidato {_fmt(te_new, te_pct)}, delta {_fmt(te_d, te_pct)}\n"
+                    f"- Correlación candidato–portafolio: actual {_fmt(corr_cur)}, con candidato {_fmt(corr_new)}, delta {_fmt(corr_d)}\n"
+                    "Escribe ~10 líneas máximo, ordenadas y claras (viñetas o mini-bloques).\n"
+                    "Después agrega 2–3 líneas sobre sentimiento de mercado usando estas noticias recientes:\n"
+                    f"{news_summary}\n"
+                    "Cierra con una recomendación breve y el sentimiento resumido (positivo/negativo/mixto)."
+                )
+
+                opinion = get_claude_opinion(prompt)
+                st.markdown(f"**Opinión de IA:**\n\n{opinion}")
 
     if description_text or fundamentals_data or geo_lines:
         st.markdown("### 🧾 Resumen fundamental")
