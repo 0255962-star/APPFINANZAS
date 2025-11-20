@@ -18,6 +18,8 @@ def _fail_secrets(msg: str):
         pass
     # Always raise so callers in any environment fail deterministically.
     raise RuntimeError(msg)
+        # When Streamlit context is unavailable (e.g., bare Python run), raise a clear error.
+        raise RuntimeError(msg)
 
 
 def load_secrets() -> Dict[str, Any]:
@@ -32,6 +34,7 @@ def load_secrets() -> Dict[str, Any]:
             "No se encontró secrets.toml. Coloca el archivo en .streamlit/secrets.toml "
             "con las claves SHEET_ID y gcp_service_account."
         )
+        return {}
 
     if not sheet_id:
         _fail_secrets("Falta `SHEET_ID` en secrets.")
