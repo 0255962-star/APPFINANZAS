@@ -616,33 +616,68 @@ def render_candidate_page(window: str) -> None:
         api_key = st.secrets.get("CLAUDE_API_KEY")
         if not api_key:
             return "No encontré la clave de Claude en los secrets."
+
         headers = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
+            "accept": "application/json",
         }
         payload = {
             "model": "claude-3-sonnet-20240229",
             "max_tokens": 600,
             "temperature": 0.3,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                        }
+                    ],
+                }
+            ],
         }
+
         try:
             resp = requests.post(
                 "https://api.anthropic.com/v1/messages", json=payload, headers=headers, timeout=30
             )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data.get("content")
-            if isinstance(content, list) and content:
-                text = content[0].get("text")
-                if text:
-                    return text
-            if isinstance(content, str):
-                return content
-            return "No recibí texto de respuesta de Claude."
         except Exception as exc:  # pragma: no cover - network guarded
-            return f"No pude obtener la opinión de IA: {exc}"
+            return f"No pude obtener la opinión de IA. Detalle técnico: {exc}"
+
+        if resp.status_code >= 400:
+            detail = None
+            try:
+                detail_data = resp.json()
+                if isinstance(detail_data, dict):
+                    err_obj = detail_data.get("error") or {}
+                    if isinstance(err_obj, dict):
+                        detail = err_obj.get("message") or err_obj.get("type")
+            except Exception:
+                detail = resp.text or None
+            friendly = detail or "Inténtalo de nuevo en unos minutos."
+            return f"No pude obtener la opinión de IA (código {resp.status_code}). {friendly}"
+
+        try:
+            data = resp.json()
+        except Exception as exc:  # pragma: no cover - network guarded
+            return f"No pude interpretar la respuesta de IA. Detalle técnico: {exc}"
+
+        content = data.get("content")
+        if isinstance(content, list) and content:
+            blocks = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_block = block.get("text")
+                    if text_block:
+                        blocks.append(text_block)
+            if blocks:
+                return "\n\n".join(blocks)
+        if isinstance(content, str):
+            return content
+        return "No recibí texto de respuesta de Claude."
 
     ia_container = st.container()
     with ia_container:
