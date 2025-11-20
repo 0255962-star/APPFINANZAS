@@ -145,7 +145,14 @@ def fetch_history(ticker: str, start: Optional[str]):
         return pd.DataFrame()
     if df.empty:
         return df
+
+    # Normalize column names and ensure AdjClose exists even when yfinance omits it.
     df = df.rename(columns={"Adj Close": "AdjClose"})
+    if "AdjClose" not in df.columns and "Close" in df.columns:
+        df["AdjClose"] = df["Close"]
+    # Drop rows that have no usable price information.
+    if "AdjClose" in df.columns:
+        df = df.dropna(subset=["AdjClose"]).copy()
     return df
 
 
@@ -205,7 +212,7 @@ def _filter_history(hist: pd.DataFrame, window: str) -> pd.DataFrame:
 
 def _render_price_tab(ticker: str, hist: pd.DataFrame):
     st.subheader("Precio histórico")
-    if hist.empty:
+    if hist.empty or "AdjClose" not in hist.columns:
         st.info("Sin datos históricos para graficar este ticker.")
         return
 
@@ -225,14 +232,21 @@ def _render_price_tab(ticker: str, hist: pd.DataFrame):
 
 def _render_volume_volatility(hist: pd.DataFrame):
     st.subheader("Volumen y volatilidad")
-    if hist.empty:
+    if hist.empty or "AdjClose" not in hist.columns:
         st.info("Sin datos de volumen/volatilidad disponibles.")
         return
 
-    vol_fig = px.bar(hist, x=hist.index, y="Volume", labels={"x": "Fecha", "Volume": "Volumen"})
-    vol_fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
+    if "Volume" not in hist.columns:
+        st.info("No hay datos de volumen disponibles para este ticker.")
+    else:
+        vol_fig = px.bar(hist, x=hist.index, y="Volume", labels={"x": "Fecha", "Volume": "Volumen"})
+        vol_fig.update_layout(height=300, margin=dict(l=10, r=10, t=30, b=10))
 
     returns = hist["AdjClose"].pct_change().dropna()
+    if returns.empty:
+        st.info("No hay suficientes datos para calcular volatilidad.")
+        return
+
     rolling_vol = returns.rolling(30).std() * np.sqrt(252)
     vol_line = px.line(
         rolling_vol,
@@ -242,7 +256,8 @@ def _render_volume_volatility(hist: pd.DataFrame):
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(vol_fig, use_container_width=True)
+        if "Volume" in hist.columns:
+            st.plotly_chart(vol_fig, use_container_width=True)
     with c2:
         st.plotly_chart(vol_line, use_container_width=True)
 
@@ -272,12 +287,12 @@ def _render_ratios(info: Dict):
 
 def _render_benchmark_compare(ticker: str, hist: pd.DataFrame, start: Optional[str]):
     st.subheader("Comparación vs benchmark (SPY)")
-    if hist.empty:
+    if hist.empty or "AdjClose" not in hist.columns:
         st.info("Sin datos para comparar contra el benchmark.")
         return
 
     spy = fetch_history("SPY", start)
-    if spy.empty:
+    if spy.empty or "AdjClose" not in spy.columns:
         st.info("No se pudieron obtener datos de SPY para comparar.")
         return
 
@@ -304,8 +319,10 @@ def render_research_page(window: str) -> None:
     st.title("🔎 Explorar / Research")
 
     with st.form(key="ticker_search"):
-        ticker = st.text_input("Ticker (ej. AAPL, NVDA, KO):", value="").strip()
+        raw_ticker = st.text_input("Ticker (ej. AAPL, NVDA, KO):", value="")
         submitted = st.form_submit_button("Buscar")
+
+    ticker = raw_ticker.strip().upper()
 
     if not submitted:
         st.info("Ingresa un ticker para explorar su información.")
@@ -332,8 +349,14 @@ def render_research_page(window: str) -> None:
     if hist is not None and not isinstance(hist, pd.DataFrame):
         hist = pd.DataFrame()
     if _safe_number((info or {}).get("regularMarketPrice")) is None and isinstance(hist, pd.DataFrame) and not hist.empty:
-        last_close = hist["Close"].iloc[-1] if "Close" in hist.columns else None
-        prev_close = hist["Close"].iloc[-2] if "Close" in hist.columns and len(hist) > 1 else None
+        last_close = None
+        prev_close = None
+        if "Close" in hist.columns:
+            last_close = hist["Close"].iloc[-1]
+            prev_close = hist["Close"].iloc[-2] if len(hist) > 1 else None
+        elif "AdjClose" in hist.columns:
+            last_close = hist["AdjClose"].iloc[-1]
+            prev_close = hist["AdjClose"].iloc[-2] if len(hist) > 1 else None
         if last_close is not None:
             info["regularMarketPrice"] = last_close
             if info.get("currency") is None:
