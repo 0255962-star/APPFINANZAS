@@ -97,8 +97,8 @@ def _register_transaction_row(
     currency = _sample_value(values, col_index, "Currency", "USD")
     source = _sample_value(values, col_index, "Source", "manual")
 
-    gross = shares * price
-    net = gross - fees - taxes
+    gross = round(float(shares) * float(price), 4)
+    net = round(gross - float(fees) - float(taxes), 4)
     trade_date = datetime.utcnow().date().isoformat()
 
     row_out = [""] * len(headers)
@@ -108,7 +108,7 @@ def _register_transaction_row(
         if idx is not None and idx < len(row_out):
             row_out[idx] = value
 
-    set_field("TradeID", str(trade_id))
+    set_field("TradeID", int(trade_id))
     set_field("Account", account)
     set_field("Ticker", normalize_symbol(ticker))
     set_field("Name", name or ticker)
@@ -116,10 +116,10 @@ def _register_transaction_row(
     set_field("Currency", currency)
     set_field("TradeDate", trade_date)
     set_field("Side", side)
-    set_field("Shares", shares)
-    set_field("Price", price)
-    set_field("Fees", fees)
-    set_field("Taxes", taxes)
+    set_field("Shares", round(float(shares), 6))
+    set_field("Price", round(float(price), 6))
+    set_field("Fees", round(float(fees), 6))
+    set_field("Taxes", round(float(taxes), 6))
     set_field("FXRate", 1.0)
     set_field("GrossAmount", gross)
     set_field("NetAmount", net)

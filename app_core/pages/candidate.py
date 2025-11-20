@@ -681,8 +681,8 @@ def render_candidate_page(window: str) -> None:
                 elif not headers:
                     st.error("No encontré encabezados válidos en la hoja Transactions.")
                 else:
-                    gross_amount = shares_real * price_entry
-                    net_amount = gross_amount - fees_input - taxes_input
+                    gross_amount = round(float(shares_real) * float(price_entry), 4)
+                    net_amount = round(gross_amount - float(fees_input) - float(taxes_input), 4)
 
                     row_out = [""] * len(headers)
 
@@ -691,7 +691,7 @@ def render_candidate_page(window: str) -> None:
                         if idx is not None and idx < len(row_out):
                             row_out[idx] = value
 
-                    set_field("TradeID", str(next_trade_id))
+                    set_field("TradeID", int(next_trade_id))
                     set_field("Account", account_default)
                     set_field("Ticker", cand)
                     set_field("Name", info.get("longName") or cand)
@@ -699,10 +699,10 @@ def render_candidate_page(window: str) -> None:
                     set_field("Currency", currency_default)
                     set_field("TradeDate", trade_date.isoformat())
                     set_field("Side", "Buy")
-                    set_field("Shares", shares_real)
-                    set_field("Price", price_entry)
-                    set_field("Fees", fees_input)
-                    set_field("Taxes", taxes_input)
+                    set_field("Shares", round(float(shares_real), 6))
+                    set_field("Price", round(float(price_entry), 6))
+                    set_field("Fees", round(float(fees_input), 6))
+                    set_field("Taxes", round(float(taxes_input), 6))
                     set_field("FXRate", 1.0)
                     set_field("GrossAmount", gross_amount)
                     set_field("NetAmount", net_amount)
@@ -716,3 +716,39 @@ def render_candidate_page(window: str) -> None:
                         st.error(f"No pude registrar la compra: {exc}")
                     else:
                         st.success("Se registró la operación. Refresca 'Mi Portafolio' para verla reflejada.")
+
+                        # Mantener la sesión sincronizada con la nueva fila para que el portafolio la tome en cuenta.
+                        tx_master = st.session_state.get("tx_master")
+                        if isinstance(tx_master, pd.DataFrame):
+                            new_row = {h: "" for h in headers}
+
+                            def assign_field(col_name: str, value):
+                                idx = col_index.get(_norm_header(col_name))
+                                if idx is not None and idx < len(headers):
+                                    new_row[headers[idx]] = value
+
+                            assign_field("TradeID", int(next_trade_id))
+                            assign_field("Account", account_default)
+                            assign_field("Ticker", cand)
+                            assign_field("Name", info.get("longName") or cand)
+                            assign_field("AssetType", asset_type_default)
+                            assign_field("Currency", currency_default)
+                            assign_field("TradeDate", trade_date.isoformat())
+                            assign_field("Side", "Buy")
+                            assign_field("Shares", round(float(shares_real), 6))
+                            assign_field("Price", round(float(price_entry), 6))
+                            assign_field("Fees", round(float(fees_input), 6))
+                            assign_field("Taxes", round(float(taxes_input), 6))
+                            assign_field("FXRate", 1.0)
+                            assign_field("GrossAmount", gross_amount)
+                            assign_field("NetAmount", net_amount)
+                            assign_field("LotID", f"L{next_lot_id}")
+                            assign_field("Source", source_default)
+                            assign_field("Notes", note)
+
+                            appended = pd.DataFrame([new_row])
+                            if not tx_master.empty:
+                                appended = appended.reindex(columns=tx_master.columns, fill_value="")
+                            st.session_state["tx_master"] = pd.concat(
+                                [tx_master, appended], ignore_index=True
+                            )
