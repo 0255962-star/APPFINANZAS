@@ -8,18 +8,35 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 
 
+def _fail_secrets(msg: str):
+    """Show a user-friendly error when secrets are missing and halt execution."""
+    try:
+        st.error(msg)
+        st.stop()
+    except Exception:
+        # When Streamlit context is unavailable (e.g., bare Python run), continue to raise.
+        pass
+    # Always raise so callers in any environment fail deterministically.
+    raise RuntimeError(msg)
+
+
 def load_secrets() -> Dict[str, Any]:
     """Return validated secrets needed by the application."""
-    sheet_id = st.secrets.get("SHEET_ID") or st.secrets.get(
-        "GSHEETS_SPREADSHEET_NAME", ""
-    )
-    gcp_sa = st.secrets.get("gcp_service_account", {})
+    try:
+        sheet_id = st.secrets.get("SHEET_ID") or st.secrets.get(
+            "GSHEETS_SPREADSHEET_NAME", ""
+        )
+        gcp_sa = st.secrets.get("gcp_service_account", {})
+    except FileNotFoundError:
+        _fail_secrets(
+            "No se encontró secrets.toml. Coloca el archivo en .streamlit/secrets.toml "
+            "con las claves SHEET_ID y gcp_service_account."
+        )
+
     if not sheet_id:
-        st.error("Falta `SHEET_ID` en secrets.")
-        st.stop()
+        _fail_secrets("Falta `SHEET_ID` en secrets.")
     if not gcp_sa:
-        st.error("Falta `gcp_service_account` en secrets.")
-        st.stop()
+        _fail_secrets("Falta `gcp_service_account` en secrets.")
     return {"sheet_id": sheet_id, "gcp_service_account": gcp_sa}
 
 
@@ -29,4 +46,3 @@ def build_credentials(scopes: Iterable[str]) -> Credentials:
     return Credentials.from_service_account_info(
         secrets["gcp_service_account"], scopes=list(scopes)
     )
-

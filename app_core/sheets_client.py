@@ -29,7 +29,9 @@ def open_ws(name: str) -> gspread.Worksheet:
 
 @st.cache_data(ttl=1200, show_spinner=False)
 def read_sheet(name: str) -> pd.DataFrame:
-    """Read an entire worksheet into a DataFrame."""
+    """Read an entire worksheet into a DataFrame with unformatted values."""
     worksheet = open_ws(name)
-    return pd.DataFrame(worksheet.get_all_records())
+    return pd.DataFrame(
+        worksheet.get_all_records(value_render_option="UNFORMATTED_VALUE")
+    )
 
