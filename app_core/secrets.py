@@ -6,6 +6,19 @@ from typing import Any, Dict, Iterable
 
 import streamlit as st
 from google.oauth2.service_account import Credentials
+from streamlit.runtime.scriptrunner import get_script_run_ctx
+
+
+def _fail_secrets(msg: str):
+    """Show a user-friendly error when secrets are missing and halt execution."""
+    # If we are running inside Streamlit, present the message and stop cleanly
+    # so the user sees the guidance without a Python traceback.
+    if get_script_run_ctx() is not None:
+        st.error(msg)
+        st.stop()
+
+    # Outside of a Streamlit run (e.g., tests or CLI), raise so callers fail fast.
+    raise RuntimeError(msg)
 
 
 def _fail_secrets(msg: str):
@@ -34,7 +47,6 @@ def load_secrets() -> Dict[str, Any]:
             "No se encontró secrets.toml. Coloca el archivo en .streamlit/secrets.toml "
             "con las claves SHEET_ID y gcp_service_account."
         )
-        return {}
 
     if not sheet_id:
         _fail_secrets("Falta `SHEET_ID` en secrets.")
