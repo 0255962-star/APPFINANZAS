@@ -157,6 +157,17 @@ def render_portfolio_page(window: str) -> None:
     start_date = _start_date_for_window(window)
     st.title("💼 Mi Portafolio")
 
+    def _build_or_fail(sync: bool = False):
+        try:
+            build_masters(sync=sync)
+        except Exception as exc:  # pragma: no cover - defensive UI handling
+            st.error(
+                "No pude cargar los datos desde Google Sheets. "
+                "Revisa tus secrets o la conexión e inténtalo de nuevo."
+            )
+            st.info(f"Detalle técnico: {exc}")
+            st.stop()
+
     if st.button("🔄 Refrescar datos", use_container_width=False, type="secondary"):
         st.cache_data.clear()
         for k in (
@@ -168,11 +179,11 @@ def render_portfolio_page(window: str) -> None:
             "_masters_built_at",
         ):
             st.session_state.pop(k, None)
-        build_masters(sync=True)
+        _build_or_fail(sync=True)
         safe_rerun()
 
     if need_build("prices_master") or masters_expired():
-        build_masters(sync=masters_expired())
+        _build_or_fail(sync=masters_expired())
 
     tx_df = _coerce_tx_numeric(st.session_state["tx_master"])
     st.session_state["tx_master"] = tx_df
