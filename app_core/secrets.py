@@ -21,6 +21,20 @@ def _fail_secrets(msg: str):
     raise RuntimeError(msg)
 
 
+def _fail_secrets(msg: str):
+    """Show a user-friendly error when secrets are missing and halt execution."""
+    try:
+        st.error(msg)
+        st.stop()
+    except Exception:
+        # When Streamlit context is unavailable (e.g., bare Python run), continue to raise.
+        pass
+    # Always raise so callers in any environment fail deterministically.
+    raise RuntimeError(msg)
+        # When Streamlit context is unavailable (e.g., bare Python run), raise a clear error.
+        raise RuntimeError(msg)
+
+
 def load_secrets() -> Dict[str, Any]:
     """Return validated secrets needed by the application."""
     try:

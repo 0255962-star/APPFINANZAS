@@ -69,8 +69,8 @@ def _next_numeric(values, col_index, column_name):
             if len(row) > idx:
                 try:
                     numbers.append(int(float(row[idx])))
-                except Exception:
-                    continue
+        except Exception:
+            continue
     return (max(numbers) if numbers else 0) + 1
 
 
