@@ -2,23 +2,46 @@
 
 from __future__ import annotations
 
+import importlib
+import traceback
+
 import streamlit as st
 
-try:
-    from app_core.pages import (
-        render_candidate_page,
-        render_placeholder_page,
-        render_portfolio_page,
-    )
-except SyntaxError as exc:  # pragma: no cover - defensive guard for corrupted files
-    st.error(
-        "Hay un error de sintaxis en los módulos de páginas. Revisa el traceback "
-        "en consola para ubicar el archivo y corrígelo."
-    )
-    st.stop()
-except Exception as exc:  # pragma: no cover - keep startup resilient
-    st.error(f"No pude cargar las páginas de la app: {exc}")
-    st.stop()
+
+def _import_page(module_name: str, attr: str):
+    """Import a page module defensively and surface clear diagnostics."""
+
+    try:
+        module = importlib.import_module(module_name)
+    except SyntaxError as exc:  # pragma: no cover - syntax issues must be corrected
+        traceback.print_exc()
+        st.error(
+            "Hay un error de sintaxis en los módulos de páginas. Corrige el archivo "
+            f"{exc.filename} en la línea {exc.lineno} y reinicia la app."
+        )
+        st.info(f"Detalle técnico: {exc.msg}")
+        st.stop()
+    except Exception as exc:  # pragma: no cover - keep startup resilient
+        traceback.print_exc()
+        st.error(
+            "No pude cargar las páginas de la app. Revisa el mensaje técnico y los "
+            "logs para más detalle."
+        )
+        st.info(f"Detalle técnico: {exc}")
+        st.stop()
+
+    try:
+        return getattr(module, attr)
+    except AttributeError:  # pragma: no cover - API contract enforcement
+        st.error(
+            f"El módulo {module_name} no expone {attr}. Revisa el código y vuelve a probar."
+        )
+        st.stop()
+
+
+render_candidate_page = _import_page("app_core.pages.candidate", "render_candidate_page")
+render_placeholder_page = _import_page("app_core.pages.placeholder", "render_placeholder_page")
+render_portfolio_page = _import_page("app_core.pages.portfolio", "render_portfolio_page")
 from app_core.ui_config import setup_ui
 
 
