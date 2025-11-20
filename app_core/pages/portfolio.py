@@ -69,9 +69,21 @@ def _next_numeric(values, col_index, column_name):
             if len(row) > idx:
                 try:
                     numbers.append(int(float(row[idx])))
-                except Exception:
-                    continue
+        except Exception:
+            continue
     return (max(numbers) if numbers else 0) + 1
+
+
+def _coerce_tx_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert transaction numeric columns to floats for consistent math and display."""
+    if df is None or df.empty:
+        return df
+    tx_df = df.copy()
+    num_cols = ["Shares", "Price", "Fees", "Taxes", "FXRate", "GrossAmount", "NetAmount"]
+    for col in num_cols:
+        if col in tx_df.columns:
+            tx_df[col] = pd.to_numeric(tx_df[col], errors="coerce")
+    return tx_df
 
 
 def _register_transaction_row(
@@ -162,7 +174,8 @@ def render_portfolio_page(window: str) -> None:
     if need_build("prices_master") or masters_expired():
         build_masters(sync=masters_expired())
 
-    tx_df = st.session_state["tx_master"]
+    tx_df = _coerce_tx_numeric(st.session_state["tx_master"])
+    st.session_state["tx_master"] = tx_df
     name_lookup = {}
     if {"Ticker", "Name"}.issubset(tx_df.columns):
         tmp = tx_df.dropna(subset=["Ticker", "Name"])
