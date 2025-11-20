@@ -4,11 +4,21 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app_core.pages import (
-    render_candidate_page,
-    render_placeholder_page,
-    render_portfolio_page,
-)
+try:
+    from app_core.pages import (
+        render_candidate_page,
+        render_placeholder_page,
+        render_portfolio_page,
+    )
+except SyntaxError as exc:  # pragma: no cover - defensive guard for corrupted files
+    st.error(
+        "Hay un error de sintaxis en los módulos de páginas. Revisa el traceback "
+        "en consola para ubicar el archivo y corrígelo."
+    )
+    st.stop()
+except Exception as exc:  # pragma: no cover - keep startup resilient
+    st.error(f"No pude cargar las páginas de la app: {exc}")
+    st.stop()
 from app_core.ui_config import setup_ui
 
 
