@@ -117,8 +117,13 @@ def get_company_info(ticker: str):
             continue
 
     def _fill_numeric(key, *candidates):
-        if info.get(key) is not None:
-            return
+        existing = info.get(key)
+        if existing not in (None, ""):
+            if isinstance(existing, (int, float, np.number)):
+                if not np.isnan(existing):
+                    return
+            else:
+                return
         for name in candidates:
             val = _to_number(base.get(name))
             if val is not None:
@@ -276,7 +281,21 @@ def render_candidate_page(window: str) -> None:
     name = info.get("longName") or cand
     st.subheader(f"{name} ({cand})")
     c_price, c_beta = st.columns(2)
-    c_price.metric("Precio actual", _fmt_value(price_now))
+    arrow = ""
+    if cand_prices is not None:
+        recent = cand_prices.dropna()
+        if len(recent) >= 2:
+            last = recent.iloc[-1]
+            prev = recent.iloc[-2]
+            if last > prev:
+                arrow = "🟢↑"
+            elif last < prev:
+                arrow = "🔴↓"
+            else:
+                arrow = "⚪︎→"
+    with c_price:
+        st.markdown("**Precio actual**")
+        st.write(f"{_fmt_value(price_now)} {arrow}")
     beta_display = _fmt_value(info.get("beta"), "{:,.2f}")
     if beta_display == "—":
         beta_display = "N/D"
@@ -366,39 +385,45 @@ def render_candidate_page(window: str) -> None:
             }
         ).dropna(how="all")
 
-    st.markdown("### 📊 Precio normalizado")
-    if cand_has_prices and bench_has_prices:
-        norm = pxdf[[cand, chart_benchmark]].ffill()
-        for col in norm.columns:
-            series = norm[col].dropna()
-            if not series.empty:
-                norm[col] = norm[col] / series.iloc[0]
-        norm = norm.dropna(how="all")
-        if norm.empty:
-            st.info("No hay datos suficientes para graficar la comparación normalizada.")
-        else:
+    st.markdown("### 📈 Comparativa visual")
+    graph_choice = st.radio(
+        "Selecciona la gráfica",
+        ["Precio actual vs normalizado", "Precio normalizado"],
+        horizontal=True,
+        index=0,
+    )
+    if graph_choice == "Precio actual vs normalizado":
+        st.caption(
+            f"Acciones simuladas: **{shares_to_simulate:,.2f}** | Inversión: **${investment_sim:,.2f}** | Peso estimado: **{(cand_weight*100):,.2f}%**"
+        )
+        if not curve.empty:
             st.plotly_chart(
-                px.line(
-                    norm,
-                    title=f"{cand} vs {chart_benchmark} (normalizado)",
-                    labels={"value": "Índice (base = 1)", "index": "Fecha"},
-                ),
+                px.line(curve, title="Evolución del portafolio (base = 1.0)"),
                 use_container_width=True,
             )
+        else:
+            st.info("No hay suficiente histórico para comparar el portafolio con y sin el candidato.")
     else:
-        st.info("No se pudo graficar la comparación normalizada por falta de datos completos.")
-
-    st.markdown("### 📈 Portafolio actual vs simulado")
-    st.caption(
-        f"Acciones simuladas: **{shares_to_simulate:,.2f}** | Inversión: **${investment_sim:,.2f}** | Peso estimado: **{(cand_weight*100):,.2f}%**"
-    )
-    if not curve.empty:
-        st.plotly_chart(
-            px.line(curve, title="Evolución del portafolio (base = 1.0)"),
-            use_container_width=True,
-        )
-    else:
-        st.info("No hay suficiente histórico para comparar el portafolio con y sin el candidato.")
+        if cand_has_prices and bench_has_prices:
+            norm = pxdf[[cand, chart_benchmark]].ffill()
+            for col in norm.columns:
+                series = norm[col].dropna()
+                if not series.empty:
+                    norm[col] = norm[col] / series.iloc[0]
+            norm = norm.dropna(how="all")
+            if norm.empty:
+                st.info("No hay datos suficientes para graficar la comparación normalizada.")
+            else:
+                st.plotly_chart(
+                    px.line(
+                        norm,
+                        title=f"{cand} vs {chart_benchmark} (normalizado)",
+                        labels={"value": "Índice (base = 1)", "index": "Fecha"},
+                    ),
+                    use_container_width=True,
+                )
+        else:
+            st.info("No se pudo graficar la comparación normalizada por falta de datos completos.")
 
     def _metrics_summary(ret_series, bench_series, rf):
         result = {
@@ -542,7 +567,9 @@ def render_candidate_page(window: str) -> None:
             color = "#22c55e" if improved else "#ef4444"
             return [f"color: {color}; font-weight:bold;"]
 
-        styled = display_df.style.apply(_delta_style, subset=["Δ"], axis=1)
+        styled = (
+            display_df.style.apply(_delta_style, subset=["Δ"], axis=1).hide(axis="index")
+        )
         st.dataframe(styled, use_container_width=True)
     else:
         st.info("No pude calcular métricas del portafolio para este escenario.")
