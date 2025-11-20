@@ -11,7 +11,6 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from ..analysis_utils import build_metrics_comparison, interpret_candidate_effect
 from ..masters import build_masters, get_setting, masters_expired, need_build
 from ..metrics import (
     annualize_return,
@@ -21,9 +20,114 @@ from ..metrics import (
     sharpe,
     sortino,
 )
-from ..prices_fetch import ensure_prices, normalize_symbol
-from ..tx_positions import delete_transactions_by_ticker, positions_from_tx
+from ..prices_fetch import normalize_symbol
+from ..sheets_client import open_ws
+from ..tx_positions import positions_from_tx
 from ..ui_config import safe_rerun
+
+DEFAULT_TX_HEADERS = [
+    "TradeID",
+    "Account",
+    "Ticker",
+    "Name",
+    "AssetType",
+    "Currency",
+    "TradeDate",
+    "Side",
+    "Shares",
+    "Price",
+    "Fees",
+    "Taxes",
+    "FXRate",
+    "GrossAmount",
+    "NetAmount",
+    "LotID",
+    "Source",
+    "Notes",
+]
+
+
+def _norm_header(val: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(val).lower())
+
+
+def _sample_value(values, col_index, column_name, default):
+    idx = col_index.get(_norm_header(column_name))
+    if idx is None:
+        return default
+    for row in values[1:]:
+        if len(row) > idx and row[idx]:
+            return row[idx]
+    return default
+
+
+def _next_numeric(values, col_index, column_name):
+    idx = col_index.get(_norm_header(column_name))
+    numbers = []
+    if idx is not None:
+        for row in values[1:]:
+            if len(row) > idx:
+                try:
+                    numbers.append(int(float(row[idx])))
+                except Exception:
+                    continue
+    return (max(numbers) if numbers else 0) + 1
+
+
+def _register_transaction_row(
+    ticker: str,
+    name: str,
+    shares: float,
+    price: float,
+    side: str,
+    note: str = "",
+    fees: float = 0.0,
+    taxes: float = 0.0,
+):
+    ws = open_ws("Transactions")
+    values = ws.get_all_values() or []
+    headers = values[0] if values else DEFAULT_TX_HEADERS.copy()
+    header_norm = [_norm_header(h) for h in headers]
+    col_index = {norm: idx for idx, norm in enumerate(header_norm)}
+
+    trade_id = _next_numeric(values, col_index, "TradeID")
+    lot_id = _next_numeric(values, col_index, "LotID")
+    account = _sample_value(values, col_index, "Account", "Cuenta Principal")
+    asset_type = _sample_value(values, col_index, "AssetType", "Stock")
+    currency = _sample_value(values, col_index, "Currency", "USD")
+    source = _sample_value(values, col_index, "Source", "manual")
+
+    gross = shares * price
+    net = gross - fees - taxes
+    trade_date = datetime.utcnow().date().isoformat()
+
+    row_out = [""] * len(headers)
+
+    def set_field(col_name: str, value):
+        idx = col_index.get(_norm_header(col_name))
+        if idx is not None and idx < len(row_out):
+            row_out[idx] = value
+
+    set_field("TradeID", str(trade_id))
+    set_field("Account", account)
+    set_field("Ticker", normalize_symbol(ticker))
+    set_field("Name", name or ticker)
+    set_field("AssetType", asset_type)
+    set_field("Currency", currency)
+    set_field("TradeDate", trade_date)
+    set_field("Side", side)
+    set_field("Shares", shares)
+    set_field("Price", price)
+    set_field("Fees", fees)
+    set_field("Taxes", taxes)
+    set_field("FXRate", 1.0)
+    set_field("GrossAmount", gross)
+    set_field("NetAmount", net)
+    set_field("LotID", f"L{lot_id}")
+    set_field("Source", source)
+    set_field("Notes", note)
+
+    ws.append_row(row_out, value_input_option="USER_ENTERED")
 
 
 def _start_date_for_window(window: str) -> Optional[str]:
@@ -58,6 +162,12 @@ def render_portfolio_page(window: str) -> None:
         build_masters(sync=masters_expired())
 
     tx_df = st.session_state["tx_master"]
+    name_lookup = {}
+    if {"Ticker", "Name"}.issubset(tx_df.columns):
+        tmp = tx_df.dropna(subset=["Ticker", "Name"])
+        for _, row in tmp.iterrows():
+            key = normalize_symbol(row["Ticker"])
+            name_lookup[key] = row["Name"]
     settings_df = st.session_state["settings_master"]
     benchmark = get_setting(settings_df, "Benchmark", "SPY", str)
     rf = get_setting(settings_df, "RF", 0.03, float)
@@ -125,66 +235,112 @@ def render_portfolio_page(window: str) -> None:
         }
     ).replace([np.inf, -np.inf], np.nan)
 
+    display_df = view.drop(columns=["➖"]).copy()
+
+    def _colorize(val):
+        if pd.isna(val):
+            return ""
+        if val > 0:
+            return "color:#22c55e;font-weight:bold;"
+        if val < 0:
+            return "color:#ef4444;font-weight:bold;"
+        return ""
+
+    if not display_df.empty:
+        highlight_cols = [
+            col
+            for col in ["P/L $", "P/L % (compra)", "Δ % ventana"]
+            if col in display_df.columns
+        ]
+        if highlight_cols:
+            styler = (
+                display_df.style.applymap(_colorize, subset=highlight_cols).hide(axis="index")
+            )
+        else:
+            styler = display_df.style.hide(axis="index")
+        st.dataframe(styler, use_container_width=True)
+    else:
+        st.info("No hay posiciones para mostrar en la tabla principal.")
+
     colcfg = {
         "➖": st.column_config.CheckboxColumn(
             label="➖",
-            help="Marcar para eliminar este ticker",
+            help="Marcar para registrar la venta completa de este ticker",
             width="small",
             default=False,
         )
     }
-    editor_key = f"positions_editor_{window}"
-    disabled_cols = [c for c in view.columns if c != "➖"]
-    edited = st.data_editor(
-        view,
+    selector_key = f"positions_selector_{window}"
+    selector_df = st.data_editor(
+        view[["Ticker", "➖"]],
         hide_index=True,
         use_container_width=True,
         column_config=colcfg,
-        disabled=disabled_cols,
-        key=editor_key,
+        key=selector_key,
     )
 
     prev_key = f"prev_editor_df_{window}"
     prev = st.session_state.get(prev_key)
     if prev is None:
-        st.session_state[prev_key] = edited.copy()
+        st.session_state[prev_key] = selector_df.copy()
     else:
-        mark = (edited["➖"] == True) & (prev["➖"] != True)
+        mark = (selector_df["➖"] == True) & (prev["➖"] != True)
         if mark.any():
             row_idx = mark[mark].index[0]
-            st.session_state["delete_candidate"] = str(
-                edited.iloc[row_idx]["Ticker"]
-            )
-        st.session_state[prev_key] = edited.copy()
+            ticker_sel = str(selector_df.iloc[row_idx]["Ticker"])
+            st.session_state["delete_candidate"] = ticker_sel
+            details = {}
+            if ticker_sel in view["Ticker"].values:
+                details = (
+                    view.loc[view["Ticker"] == ticker_sel].iloc[0].to_dict()
+                )
+            st.session_state["delete_info"] = details
+        st.session_state[prev_key] = selector_df.copy()
 
     if st.session_state.get("delete_candidate"):
         tkr = st.session_state["delete_candidate"]
+        info_row = st.session_state.get("delete_info", {})
+        shares_to_sell = float(info_row.get("Shares", 0) or 0)
+        price_to_use = float(info_row.get("Last", 0) or 0)
         st.warning(
-            f"¿Seguro que quieres eliminar **todas** las transacciones de **{tkr}** en *Transactions*?"
+            f"Registrarás la venta completa de **{shares_to_sell:,.2f}** acciones de **{tkr}**."
         )
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("✅ Sí, eliminar"):
-                deleted = delete_transactions_by_ticker(tkr)
-                st.session_state["delete_candidate"] = ""
-                st.session_state[prev_key]["➖"] = False
-                if deleted > 0:
-                    st.success(f"Se eliminaron {deleted} fila(s) de {tkr}.")
+            if st.button("✅ Sí, registrar venta"):
+                if shares_to_sell <= 0 or price_to_use <= 0:
+                    st.error("No tengo datos suficientes del precio o de las acciones para esta venta.")
                 else:
-                    st.info("No se encontraron filas para eliminar.")
-                for k in (
-                    "tx_master",
-                    "settings_master",
-                    "prices_master",
-                    "bench_ret_master",
-                    "last_map_master",
-                ):
-                    st.session_state.pop(k, None)
-                build_masters(sync=False)
-                safe_rerun()
+                    try:
+                        _register_transaction_row(
+                            ticker=tkr,
+                            name=name_lookup.get(normalize_symbol(tkr), name_lookup.get(tkr, tkr)),
+                            shares=shares_to_sell,
+                            price=price_to_use,
+                            side="Sell",
+                            note="Venta registrada desde Mi Portafolio",
+                        )
+                    except Exception as exc:
+                        st.error(f"No pude registrar la venta: {exc}")
+                    else:
+                        st.success("Se registró la venta en la hoja Transactions.")
+                        st.session_state["delete_candidate"] = ""
+                        st.session_state.pop("delete_info", None)
+                        st.session_state[prev_key]["➖"] = False
+                        for k in (
+                            "tx_master",
+                            "settings_master",
+                            "prices_master",
+                            "bench_ret_master",
+                            "last_map_master",
+                        ):
+                            st.session_state.pop(k, None)
+                        build_masters(sync=False)
+                        safe_rerun()
         with c2:
             if st.button("❌ No, cancelar"):
                 st.session_state["delete_candidate"] = ""
+                st.session_state.pop("delete_info", None)
                 st.session_state[prev_key]["➖"] = False
                 st.info("Operación cancelada.")
 
@@ -223,77 +379,25 @@ def render_portfolio_page(window: str) -> None:
     else:
         st.info("Necesito al menos 2 días de histórico para calcular métricas.")
 
-    # --- Nueva funcionalidad: expander para pre-evaluar candidatos ---
-    with st.expander("Evaluar candidato antes de añadirlo"):
-        st.caption("Simulación rápida para estimar el impacto antes de registrar un nuevo peso.")
-        eval_cols = st.columns([2, 1])
-        eval_key = f"pre_eval_{window}"
-        with eval_cols[0]:
-            cand_input = st.text_input(
-                "Ticker a evaluar",
-                placeholder="Ej. NVDA, KO, BRK.B",
-                key=f"{eval_key}_ticker",
-            )
-        with eval_cols[1]:
-            weight_sim = st.slider(
-                "Peso hipotético",
-                min_value=0.0,
-                max_value=0.10,
-                value=0.02,
-                step=0.01,
-                key=f"{eval_key}_weight",
-                help="Peso hipotético que tendría el nuevo activo en tu portafolio.",
-            )
-        trigger = st.button("Evaluar impacto", key=f"{eval_key}_btn")
-
-        if trigger:
-            if not cand_input:
-                st.info("Ingresa un ticker para evaluar su incorporación.")
-            elif prices is None or prices.empty or prices.shape[0] < 2 or port_ret.empty:
-                st.info("Necesito histórico del portafolio para correr la simulación.")
-            else:
-                cand = normalize_symbol(cand_input)
-                if not re.match(r"^[A-Z0-9\.\-]+$", cand):
-                    st.error("Ticker inválido.")
-                else:
-                    sim_start = prices.index[0].strftime("%Y-%m-%d")
-                    cand_hist = ensure_prices([cand], sim_start, persist=True)
-                    if cand_hist is None or cand_hist.empty or cand not in cand_hist.columns:
-                        st.warning("No encontré datos suficientes de ese ticker.")
-                    else:
-                        cand_px = cand_hist[cand].reindex(prices.index).ffill()
-                        cand_ret = cand_px.pct_change().dropna()
-                        combo = pd.concat(
-                            [port_ret.rename("port"), cand_ret.rename("cand")], axis=1
-                        ).dropna()
-                        if combo.empty:
-                            st.info("No hubo intersección suficiente de fechas para correr la simulación.")
-                        else:
-                            port_base = combo["port"]
-                            cand_aligned = combo["cand"]
-                            port_ret_new = port_base * (1 - weight_sim) + cand_aligned * weight_sim
-                            comp = build_metrics_comparison(port_base, port_ret_new, rf)
-                            st.dataframe(comp.table, use_container_width=True)
-
-                            growth = pd.DataFrame(
-                                {
-                                    "Actual": (1 + port_base).cumprod(),
-                                    f"+{cand}": (1 + port_ret_new).cumprod(),
-                                }
-                            )
-                            st.plotly_chart(
-                                px.line(
-                                    growth,
-                                    title=f"Crecimiento de 1.0: Actual vs +{cand}",
-                                    labels={"index": "Fecha", "value": "Índice"},
-                                ),
-                                use_container_width=True,
-                            )
-                            interp = interpret_candidate_effect(
-                                comp.current, comp.new, cand, weight_sim
-                            )
-                            st.markdown(
-                                f"> {interp.replace(chr(10), '<br>')}",
-                                unsafe_allow_html=True,
-                            )
-    # --- Fin nueva funcionalidad: expander para pre-evaluar candidatos ---
+    st.markdown("### 🕑 Historial")
+    history_df = tx_df.copy()
+    if not history_df.empty:
+        amount_col = "NetAmount" if "NetAmount" in history_df.columns else "GrossAmount"
+        if "TradeDate" in history_df.columns:
+            history_df["TradeDate"] = pd.to_datetime(history_df["TradeDate"], errors="coerce")
+            history_df = history_df.sort_values("TradeDate", ascending=False)
+        columns = ["TradeDate", "Ticker", "Name", "Side", "Shares", "Price"]
+        if amount_col:
+            columns.append(amount_col)
+        columns = [c for c in columns if c in history_df.columns]
+        hist_display = history_df[columns].head(7).copy()
+        if "TradeDate" in hist_display.columns:
+            hist_display["TradeDate"] = pd.to_datetime(
+                hist_display["TradeDate"], errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+        hist_display = hist_display.rename(
+            columns={amount_col: "Importe"} if amount_col in hist_display.columns else {}
+        )
+        st.dataframe(hist_display, use_container_width=True)
+    else:
+        st.info("No hay movimientos registrados en la hoja de Transacciones.")
