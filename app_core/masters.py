@@ -14,6 +14,18 @@ from .sheets_client import read_sheet
 SESSION_TTL_MIN = 30
 
 
+def _coerce_tx_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure transaction numeric columns are coerced for reliable calculations."""
+    if df is None or df.empty:
+        return df
+    tx_df = df.copy()
+    num_cols = ["Shares", "Price", "Fees", "Taxes", "FXRate", "GrossAmount", "NetAmount"]
+    for col in num_cols:
+        if col in tx_df.columns:
+            tx_df[col] = pd.to_numeric(tx_df[col], errors="coerce")
+    return tx_df
+
+
 def get_setting(settings_df, key, default=None, cast=float):
     try:
         s = settings_df.loc[settings_df["Key"] == key, "Value"]
@@ -36,7 +48,7 @@ def masters_expired() -> bool:
 
 
 def build_masters(sync: bool):
-    tx_df = read_sheet("Transactions")
+    tx_df = _coerce_tx_numeric(read_sheet("Transactions"))
     settings_df = read_sheet("Settings")
     benchmark = get_setting(settings_df, "Benchmark", "SPY", str)
     tickers = sorted(
@@ -105,6 +117,7 @@ def _rebuild_prices_masters_light():
     tx_df = st.session_state.get("tx_master")
     if tx_df is None or tx_df.empty:
         tx_df = read_sheet("Transactions")
+    tx_df = _coerce_tx_numeric(tx_df)
     tickers = sorted(
         set(
             t
