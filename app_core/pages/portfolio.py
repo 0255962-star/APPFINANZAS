@@ -67,10 +67,14 @@ def _next_numeric(values, col_index, column_name):
     if idx is not None:
         for row in values[1:]:
             if len(row) > idx:
+                val = row[idx]
+                if val is None or val == "":
+                    continue
                 try:
-                    numbers.append(int(float(row[idx])))
-        except Exception:
-            continue
+                    num = float(val)
+                except Exception:
+                    continue
+                numbers.append(int(num))
     return (max(numbers) if numbers else 0) + 1
 
 

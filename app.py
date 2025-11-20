@@ -14,12 +14,13 @@ def _import_page(module_name: str, attr: str):
     try:
         module = importlib.import_module(module_name)
     except SyntaxError as exc:  # pragma: no cover - syntax issues must be corrected
-        traceback.print_exc()
+        full_tb = traceback.format_exc()
         st.error(
             "Hay un error de sintaxis en los módulos de páginas. Corrige el archivo "
             f"{exc.filename} en la línea {exc.lineno} y reinicia la app."
         )
         st.info(f"Detalle técnico: {exc.msg}")
+        st.caption(full_tb)
         st.stop()
     except Exception as exc:  # pragma: no cover - keep startup resilient
         traceback.print_exc()
