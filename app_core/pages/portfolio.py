@@ -22,7 +22,7 @@ from ..metrics import (
 )
 from ..prices_fetch import normalize_symbol
 from ..sheets_client import open_ws
-from ..tx_positions import positions_from_tx
+from ..tx_positions import delete_transactions_by_ticker, positions_from_tx
 from ..ui_config import safe_rerun
 
 DEFAULT_TX_HEADERS = [
@@ -69,9 +69,21 @@ def _next_numeric(values, col_index, column_name):
             if len(row) > idx:
                 try:
                     numbers.append(int(float(row[idx])))
-                except Exception:
-                    continue
+        except Exception:
+            continue
     return (max(numbers) if numbers else 0) + 1
+
+
+def _coerce_tx_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert transaction numeric columns to floats for consistent math and display."""
+    if df is None or df.empty:
+        return df
+    tx_df = df.copy()
+    num_cols = ["Shares", "Price", "Fees", "Taxes", "FXRate", "GrossAmount", "NetAmount"]
+    for col in num_cols:
+        if col in tx_df.columns:
+            tx_df[col] = pd.to_numeric(tx_df[col], errors="coerce")
+    return tx_df
 
 
 def _register_transaction_row(
@@ -97,8 +109,8 @@ def _register_transaction_row(
     currency = _sample_value(values, col_index, "Currency", "USD")
     source = _sample_value(values, col_index, "Source", "manual")
 
-    gross = shares * price
-    net = gross - fees - taxes
+    gross = round(float(shares) * float(price), 4)
+    net = round(gross - float(fees) - float(taxes), 4)
     trade_date = datetime.utcnow().date().isoformat()
 
     row_out = [""] * len(headers)
@@ -108,7 +120,7 @@ def _register_transaction_row(
         if idx is not None and idx < len(row_out):
             row_out[idx] = value
 
-    set_field("TradeID", str(trade_id))
+    set_field("TradeID", int(trade_id))
     set_field("Account", account)
     set_field("Ticker", normalize_symbol(ticker))
     set_field("Name", name or ticker)
@@ -116,10 +128,10 @@ def _register_transaction_row(
     set_field("Currency", currency)
     set_field("TradeDate", trade_date)
     set_field("Side", side)
-    set_field("Shares", shares)
-    set_field("Price", price)
-    set_field("Fees", fees)
-    set_field("Taxes", taxes)
+    set_field("Shares", round(float(shares), 6))
+    set_field("Price", round(float(price), 6))
+    set_field("Fees", round(float(fees), 6))
+    set_field("Taxes", round(float(taxes), 6))
     set_field("FXRate", 1.0)
     set_field("GrossAmount", gross)
     set_field("NetAmount", net)
@@ -146,6 +158,7 @@ def render_portfolio_page(window: str) -> None:
     st.title("💼 Mi Portafolio")
 
     if st.button("🔄 Refrescar datos", use_container_width=False, type="secondary"):
+        st.cache_data.clear()
         for k in (
             "tx_master",
             "settings_master",
@@ -161,7 +174,8 @@ def render_portfolio_page(window: str) -> None:
     if need_build("prices_master") or masters_expired():
         build_masters(sync=masters_expired())
 
-    tx_df = st.session_state["tx_master"]
+    tx_df = _coerce_tx_numeric(st.session_state["tx_master"])
+    st.session_state["tx_master"] = tx_df
     name_lookup = {}
     if {"Ticker", "Name"}.issubset(tx_df.columns):
         tmp = tx_df.dropna(subset=["Ticker", "Name"])
@@ -231,102 +245,76 @@ def render_portfolio_page(window: str) -> None:
             ),
             "Peso %": (w.reindex(pos_df_view["Ticker"]).values * 100.0),
             "Valor": pos_df_view["MarketValue"].values,
-            "➖": [False] * len(pos_df_view),
+            "Acción": [False] * len(pos_df_view),
         }
     ).replace([np.inf, -np.inf], np.nan)
 
-    display_df = view.drop(columns=["➖"]).copy()
-
-    def _colorize(val):
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return "color:#22c55e;font-weight:bold;"
-        if val < 0:
-            return "color:#ef4444;font-weight:bold;"
-        return ""
-
-    if not display_df.empty:
-        highlight_cols = [
-            col
-            for col in ["P/L $", "P/L % (compra)", "Δ % ventana"]
-            if col in display_df.columns
-        ]
-        if highlight_cols:
-            styler = (
-                display_df.style.applymap(_colorize, subset=highlight_cols).hide(axis="index")
-            )
-        else:
-            styler = display_df.style.hide(axis="index")
-        st.dataframe(styler, use_container_width=True)
-    else:
-        st.info("No hay posiciones para mostrar en la tabla principal.")
-
     colcfg = {
-        "➖": st.column_config.CheckboxColumn(
+        "Acción": st.column_config.CheckboxColumn(
             label="➖",
-            help="Marcar para registrar la venta completa de este ticker",
+            help="Gestiona esta posición (vender o eliminar)",
             width="small",
             default=False,
         )
     }
-    selector_key = f"positions_selector_{window}"
-    selector_df = st.data_editor(
-        view[["Ticker", "➖"]],
+    display_key = f"portfolio_view_{window}"
+    display_df = view.copy()
+    editor_df = st.data_editor(
+        display_df,
         hide_index=True,
         use_container_width=True,
         column_config=colcfg,
-        key=selector_key,
+        disabled=[c for c in display_df.columns if c != "Acción"],
+        key=display_key,
     )
+    if editor_df.empty:
+        st.info("No hay posiciones para mostrar en la tabla principal.")
 
-    prev_key = f"prev_editor_df_{window}"
+    prev_key = f"prev_portfolio_df_{window}"
     prev = st.session_state.get(prev_key)
     if prev is None:
-        st.session_state[prev_key] = selector_df.copy()
+        st.session_state[prev_key] = editor_df.copy()
     else:
-        mark = (selector_df["➖"] == True) & (prev["➖"] != True)
+        mark = (editor_df["Acción"] == True) & (prev["Acción"] != True)
         if mark.any():
             row_idx = mark[mark].index[0]
-            ticker_sel = str(selector_df.iloc[row_idx]["Ticker"])
-            st.session_state["delete_candidate"] = ticker_sel
+            ticker_sel = str(editor_df.iloc[row_idx]["Ticker"])
+            st.session_state["action_candidate"] = ticker_sel
             details = {}
             if ticker_sel in view["Ticker"].values:
-                details = (
-                    view.loc[view["Ticker"] == ticker_sel].iloc[0].to_dict()
-                )
-            st.session_state["delete_info"] = details
-        st.session_state[prev_key] = selector_df.copy()
+                details = view.loc[view["Ticker"] == ticker_sel].iloc[0].to_dict()
+            st.session_state["action_info"] = details
+        st.session_state[prev_key] = editor_df.copy()
 
-    if st.session_state.get("delete_candidate"):
-        tkr = st.session_state["delete_candidate"]
-        info_row = st.session_state.get("delete_info", {})
-        shares_to_sell = float(info_row.get("Shares", 0) or 0)
-        price_to_use = float(info_row.get("Last", 0) or 0)
-        st.warning(
-            f"Registrarás la venta completa de **{shares_to_sell:,.2f}** acciones de **{tkr}**."
-        )
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("✅ Sí, registrar venta"):
-                if shares_to_sell <= 0 or price_to_use <= 0:
-                    st.error("No tengo datos suficientes del precio o de las acciones para esta venta.")
-                else:
-                    try:
-                        _register_transaction_row(
-                            ticker=tkr,
-                            name=name_lookup.get(normalize_symbol(tkr), name_lookup.get(tkr, tkr)),
-                            shares=shares_to_sell,
-                            price=price_to_use,
-                            side="Sell",
-                            note="Venta registrada desde Mi Portafolio",
+    def _reset_action_state():
+        st.session_state["action_candidate"] = ""
+        st.session_state.pop("action_info", None)
+        if prev_key in st.session_state:
+            st.session_state[prev_key]["Acción"] = False
+
+    if st.session_state.get("action_candidate"):
+        tkr = st.session_state["action_candidate"]
+        info_row = st.session_state.get("action_info", {})
+        shares_available = float(info_row.get("Shares", 0) or 0)
+        last_price = float(info_row.get("Last", 0) or 0)
+        with st.expander(f"Acciones para {tkr}", expanded=True):
+            choice = st.radio(
+                "¿Qué quieres hacer con esta posición?",
+                ("Eliminar registro", "Vender", "Cancelar"),
+                key=f"action_choice_{tkr}_{window}",
+            )
+            if choice == "Eliminar registro":
+                if st.button("🗑️ Confirmar eliminación", key=f"confirm_delete_{tkr}"):
+                    deleted = delete_transactions_by_ticker(tkr)
+                    if deleted <= 0:
+                        st.error(
+                            "No encontré transacciones para eliminar o no se pudo completar la operación."
                         )
-                    except Exception as exc:
-                        st.error(f"No pude registrar la venta: {exc}")
                     else:
-                        st.success("Se registró la venta en la hoja Transactions.")
-                        st.session_state["delete_candidate"] = ""
-                        st.session_state.pop("delete_info", None)
-                        st.session_state[prev_key]["➖"] = False
+                        st.success(
+                            f"Se eliminaron {deleted} movimientos de {tkr} y ya no contará en el portafolio."
+                        )
+                        _reset_action_state()
                         for k in (
                             "tx_master",
                             "settings_master",
@@ -335,14 +323,63 @@ def render_portfolio_page(window: str) -> None:
                             "last_map_master",
                         ):
                             st.session_state.pop(k, None)
-                        build_masters(sync=False)
+                        st.cache_data.clear()
+                        build_masters(sync=True)
                         safe_rerun()
-        with c2:
-            if st.button("❌ No, cancelar"):
-                st.session_state["delete_candidate"] = ""
-                st.session_state.pop("delete_info", None)
-                st.session_state[prev_key]["➖"] = False
-                st.info("Operación cancelada.")
+            elif choice == "Vender":
+                sell_shares = st.number_input(
+                    "Acciones a vender",
+                    min_value=0.0,
+                    max_value=float(max(shares_available, 0)),
+                    value=float(max(shares_available, 0)),
+                    step=0.01,
+                    key=f"sell_qty_{tkr}_{window}",
+                )
+                sell_price = st.number_input(
+                    "Precio de venta",
+                    min_value=0.0,
+                    value=float(max(last_price, 0)),
+                    step=0.01,
+                    key=f"sell_px_{tkr}_{window}",
+                )
+                if st.button("💸 Registrar venta", key=f"confirm_sell_{tkr}"):
+                    if sell_shares <= 0:
+                        st.error("Debes vender al menos 0.01 acciones.")
+                    elif sell_shares > shares_available + 1e-9:
+                        st.error("No puedes vender más acciones de las que tienes.")
+                    elif sell_price <= 0:
+                        st.error("El precio de venta debe ser mayor que cero.")
+                    else:
+                        try:
+                            _register_transaction_row(
+                                ticker=tkr,
+                                name=name_lookup.get(
+                                    normalize_symbol(tkr), name_lookup.get(tkr, tkr)
+                                ),
+                                shares=sell_shares,
+                                price=sell_price,
+                                side="Sell",
+                                note="Venta registrada desde Mi Portafolio",
+                            )
+                        except Exception as exc:
+                            st.error(f"No pude registrar la venta: {exc}")
+                        else:
+                            st.success("Se registró la venta en la hoja Transactions.")
+                            _reset_action_state()
+                            for k in (
+                                "tx_master",
+                                "settings_master",
+                                "prices_master",
+                                "bench_ret_master",
+                                "last_map_master",
+                            ):
+                                st.session_state.pop(k, None)
+                            st.cache_data.clear()
+                            build_masters(sync=True)
+                            safe_rerun()
+            else:
+                if st.button("❌ Cancelar", key=f"cancel_action_{tkr}"):
+                    _reset_action_state()
 
     port_ret = pd.Series(dtype=float)
 
