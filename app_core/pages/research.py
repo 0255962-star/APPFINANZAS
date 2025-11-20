@@ -89,7 +89,11 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
     info["longName"] = _from_info("longName") or _from_info("shortName")
     info["symbol"] = ticker.upper()
     info["currency"] = _from_fast("currency") or _from_info("currency")
-    info["regularMarketPrice"] = _from_fast("last_price") or _from_fast("lastPrice")
+    info["regularMarketPrice"] = (
+        _from_fast("last_price")
+        or _from_fast("lastPrice")
+        or _from_info("regularMarketPrice", "currentPrice")
+    )
     info["regularMarketPreviousClose"] = _from_fast("previousClose") or _from_info(
         "previousClose"
     )
@@ -123,7 +127,22 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(ticker: str, start: Optional[str]):
-    df = yf.download(ticker, start=start or None, progress=False, auto_adjust=False)
+    try:
+        df = yf.download(
+            ticker,
+            start=start or None,
+            progress=False,
+            auto_adjust=False,
+            threads=False,
+        )
+        if df.empty:
+            df = yf.download(
+                ticker, period="max", progress=False, auto_adjust=False, threads=False
+            )
+        if df.empty:
+            df = yf.Ticker(ticker).history(period="max", auto_adjust=False)
+    except Exception:
+        return pd.DataFrame()
     if df.empty:
         return df
     df = df.rename(columns={"Adj Close": "AdjClose"})
@@ -309,7 +328,20 @@ def render_research_page(window: str) -> None:
             st.caption(str(exc))
             return
 
-    if not info or (_safe_number(info.get("regularMarketPrice")) is None and hist.empty):
+    # If fast/info endpoints don't surface price data, fall back to the latest close from history.
+    if hist is not None and not isinstance(hist, pd.DataFrame):
+        hist = pd.DataFrame()
+    if _safe_number((info or {}).get("regularMarketPrice")) is None and isinstance(hist, pd.DataFrame) and not hist.empty:
+        last_close = hist["Close"].iloc[-1] if "Close" in hist.columns else None
+        prev_close = hist["Close"].iloc[-2] if "Close" in hist.columns and len(hist) > 1 else None
+        if last_close is not None:
+            info["regularMarketPrice"] = last_close
+            if info.get("currency") is None:
+                info["currency"] = hist.attrs.get("currency")
+        if prev_close is not None:
+            info["regularMarketPreviousClose"] = prev_close
+
+    if not info or (_safe_number(info.get("regularMarketPrice")) is None and (hist is None or hist.empty)):
         st.error(
             f"No se pudo obtener información para el ticker {ticker.upper()}. Verifica que esté bien escrito."
         )
