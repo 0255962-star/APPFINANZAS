@@ -733,23 +733,25 @@ def render_candidate_page(window: str) -> None:
                 news_summary = get_recent_news_summary(cand)
 
                 prompt = (
-                    "Eres un analista financiero con tono formal-casual para un estudiante mexicano de 7º semestre. "
-                    "Usa frases cortas y viñetas, con alguna palabra divertida ocasional. "
-                    "Analiza cómo el candidato cambia el portafolio usando EXCLUSIVAMENTE estas métricas:\n"
-                    f"- Rendimiento anualizado: actual {_fmt(rend_cur, rend_pct)}, con candidato {_fmt(rend_new, rend_pct)}, delta {_fmt(rend_d, rend_pct)}\n"
-                    f"- Volatilidad anualizada: actual {_fmt(vol_cur, vol_pct)}, con candidato {_fmt(vol_new, vol_pct)}, delta {_fmt(vol_d, vol_pct)}\n"
-                    f"- Sharpe: actual {_fmt(sharpe_cur)}, con candidato {_fmt(sharpe_new)}, delta {_fmt(sharpe_d)}\n"
-                    f"- Sortino: actual {_fmt(sortino_cur)}, con candidato {_fmt(sortino_new)}, delta {_fmt(sortino_d)}\n"
-                    f"- Max Drawdown: actual {_fmt(mdd_cur, mdd_pct)}, con candidato {_fmt(mdd_new, mdd_pct)}, delta {_fmt(mdd_d, mdd_pct)}\n"
-                    f"- Calmar: actual {_fmt(calmar_cur)}, con candidato {_fmt(calmar_new)}, delta {_fmt(calmar_d)}\n"
-                    f"- Beta vs SPY: actual {_fmt(beta_cur)}, con candidato {_fmt(beta_new)}, delta {_fmt(beta_d)}\n"
-                    f"- Tracking Error: actual {_fmt(te_cur, te_pct)}, con candidato {_fmt(te_new, te_pct)}, delta {_fmt(te_d, te_pct)}\n"
-                    f"- Correlación candidato–portafolio: actual {_fmt(corr_cur)}, con candidato {_fmt(corr_new)}, delta {_fmt(corr_d)}\n"
-                    "Escribe ~10 líneas máximo, ordenadas y claras (viñetas o mini-bloques).\n"
-                    "Después agrega 2–3 líneas sobre sentimiento de mercado usando estas noticias recientes:\n"
+                    "Contexto: eres un profesor de finanzas buena onda hablando con un estudiante mexicano de 7º semestre que ya entiende Sharpe, Sortino y drawdown. "
+                    f"Estamos evaluando el impacto de la acción {cand} ({name}) en el portafolio actual. "
+                    "Tono formal–casual: claro, técnico pero accesible, con alguna frase ligera ocasional.\n\n"
+                    "Datos para tu referencia (no recites uno por uno, interprétalos):\n"
+                    f"- Rendimiento anualizado actual {_fmt(rend_cur, rend_pct)} vs candidato {_fmt(rend_new, rend_pct)} (Δ {_fmt(rend_d, rend_pct)})\n"
+                    f"- Volatilidad anualizada {_fmt(vol_cur, vol_pct)} → {_fmt(vol_new, vol_pct)} (Δ {_fmt(vol_d, vol_pct)})\n"
+                    f"- Sharpe {_fmt(sharpe_cur)} → {_fmt(sharpe_new)} (Δ {_fmt(sharpe_d)}); Sortino {_fmt(sortino_cur)} → {_fmt(sortino_new)}\n"
+                    f"- Max Drawdown {_fmt(mdd_cur, mdd_pct)} → {_fmt(mdd_new, mdd_pct)} (Δ {_fmt(mdd_d, mdd_pct)}) y Calmar {_fmt(calmar_cur)} → {_fmt(calmar_new)}\n"
+                    f"- Beta vs SPY {_fmt(beta_cur)} → {_fmt(beta_new)} (Δ {_fmt(beta_d)}); Tracking Error {_fmt(te_cur, te_pct)} → {_fmt(te_new, te_pct)}\n"
+                    f"- Correlación candidato–portafolio {_fmt(corr_cur)} → {_fmt(corr_new)} (Δ {_fmt(corr_d)})\n\n"
+                    "Instrucciones de salida: inicia mencionando que analizas {ticker} ({company}) dentro del portafolio. "
+                    "Organiza en bloques temáticos (rentabilidad vs riesgo; drawdown/resiliencia; beta/tracking error y cercanía al benchmark; diversificación por correlación). "
+                    "Interpreta si mejora o empeora el perfil riesgo–retorno, si la mejora es marginal o sustancial y para qué tipo de inversionista encaja. "
+                    "No enumeres métricas una por una porque el alumno ya ve la tabla; usa los números solo para justificar conclusiones. "
+                    "Cierra con una conclusión de 3–4 líneas que responda si vale la pena incluir {ticker} ({company}), bajo qué tolerancia a riesgo/drawdown y qué tan fuerte es la mejora.\n\n"
+                    "Noticias y sentimiento: usa este resumen si existe, y si no hay noticias dilo en una sola línea y sigue con el análisis cuantitativo. Resume en 2–3 líneas el sentimiento del mercado: \n"
                     f"{news_summary}\n"
-                    "Cierra con una recomendación breve y el sentimiento resumido (positivo/negativo/mixto)."
-                )
+                    "Entrega el análisis en 10–12 líneas aprox. con viñetas o mini-bloques, tono de profe accesible y sin párrafo gigante."
+                ).format(ticker=cand, company=name)
 
                 opinion = get_claude_opinion(prompt)
                 st.markdown(f"**Opinión de IA:**\n\n{opinion}")
