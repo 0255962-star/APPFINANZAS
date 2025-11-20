@@ -56,13 +56,20 @@ def _fmt_percent(val) -> str:
     return f"{num*100:,.2f}%" if abs(num) < 2 else f"{num:,.2f}%"
 
 
+def _secret_or_none(key: str):
+    try:
+        return st.secrets.get(key)
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=1200, show_spinner=False)
 def fetch_ticker_snapshot(ticker: str) -> Dict:
     t = yf.Ticker(ticker)
     info: Dict = {}
 
     def _alpha_overview(symbol: str) -> Dict:
-        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        api_key = _secret_or_none("ALPHAVANTAGE_API_KEY")
         if not api_key:
             return {}
         try:
@@ -170,7 +177,7 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
     )
 
     if _safe_number(info.get("regularMarketPrice")) is None:
-        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        api_key = _secret_or_none("ALPHAVANTAGE_API_KEY")
         if api_key:
             try:
                 resp = requests.get(
@@ -198,8 +205,8 @@ def fetch_ticker_snapshot(ticker: str) -> Dict:
 
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_history(ticker: str, start: Optional[str]):
-    def _alpha_history(symbol: str) -> pd.DataFrame:
-        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+    def _alpha_history(symbol: str, want_full: bool) -> pd.DataFrame:
+        api_key = _secret_or_none("ALPHAVANTAGE_API_KEY")
         if not api_key:
             return pd.DataFrame()
         try:
@@ -208,12 +215,17 @@ def fetch_history(ticker: str, start: Optional[str]):
                 params={
                     "function": "TIME_SERIES_DAILY_ADJUSTED",
                     "symbol": symbol,
-                    "outputsize": "compact",
+                    "outputsize": "full" if want_full else "compact",
                     "apikey": api_key,
                 },
                 timeout=15,
             )
-            data = resp.json().get("Time Series (Daily)", {})
+            payload = resp.json()
+            if not isinstance(payload, dict):
+                return pd.DataFrame()
+            if "Note" in payload or "Error Message" in payload:
+                return pd.DataFrame()
+            data = payload.get("Time Series (Daily)", {})
         except Exception:
             return pd.DataFrame()
         if not data:
@@ -239,6 +251,14 @@ def fetch_history(ticker: str, start: Optional[str]):
         df_alpha.attrs["currency"] = "USD"
         return df_alpha
 
+    want_full_history = False
+    if start:
+        try:
+            start_dt = datetime.strptime(start, "%Y-%m-%d")
+            want_full_history = (datetime.utcnow() - start_dt).days > 150
+        except Exception:
+            want_full_history = False
+
     try:
         df = yf.download(
             ticker,
@@ -257,7 +277,7 @@ def fetch_history(ticker: str, start: Optional[str]):
         df = pd.DataFrame()
 
     if df.empty:
-        df = _alpha_history(ticker)
+        df = _alpha_history(ticker, want_full_history)
     if df.empty:
         return df
 
