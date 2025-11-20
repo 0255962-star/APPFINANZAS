@@ -43,6 +43,7 @@ def _import_page(module_name: str, attr: str):
 render_candidate_page = _import_page("app_core.pages.candidate", "render_candidate_page")
 render_placeholder_page = _import_page("app_core.pages.placeholder", "render_placeholder_page")
 render_portfolio_page = _import_page("app_core.pages.portfolio", "render_portfolio_page")
+render_research_page = _import_page("app_core.pages.research", "render_research_page")
 from app_core.ui_config import setup_ui
 
 
@@ -67,6 +68,8 @@ def main() -> None:
         render_portfolio_page(window)
     elif page == "Evaluar Candidato":
         render_candidate_page(window)
+    elif page == "Explorar / Research":
+        render_research_page(window)
     else:
         render_placeholder_page(page)
 
