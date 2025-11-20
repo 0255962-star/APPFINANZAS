@@ -78,7 +78,7 @@ def tidy_transactions(tx: pd.DataFrame) -> pd.DataFrame:
     df["Ticker"] = df["Ticker"].astype(str).apply(normalize_symbol)
     df = df.dropna(subset=["Ticker"])
     df["TradeDate"] = pd.to_datetime(df["TradeDate"], errors="coerce").dt.date
-    for col in [
+    num_cols = [
         "Shares",
         "Price",
         "Fees",
@@ -86,11 +86,12 @@ def tidy_transactions(tx: pd.DataFrame) -> pd.DataFrame:
         "FXRate",
         "GrossAmount",
         "NetAmount",
-    ]:
+    ]
+    for col in num_cols:
         if col in df.columns:
             if pd.api.types.is_datetime64_any_dtype(df[col]):
                 df[col] = np.nan
-            df[col] = df[col].map(_parse_number)
+            df[col] = pd.to_numeric(df[col].map(_parse_number), errors="coerce")
     if "FXRate" in df.columns:
         df["FXRate"] = df["FXRate"].replace(0, np.nan).fillna(1.0)
     for col in ["Fees", "Taxes"]:
