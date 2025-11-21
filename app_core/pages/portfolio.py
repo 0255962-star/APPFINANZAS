@@ -159,7 +159,7 @@ def _start_date_for_window(window: str) -> Optional[str]:
 def render_portfolio_page(window: str) -> None:
     """Render the portfolio tab."""
     start_date = _start_date_for_window(window)
-    st.title("💼 Mi Portafolio")
+    st.title("Mi Portafolio")
 
     def _build_or_fail(sync: bool = False):
         try:
@@ -172,7 +172,7 @@ def render_portfolio_page(window: str) -> None:
             st.info(f"Detalle técnico: {exc}")
             st.stop()
 
-    if st.button("🔄 Refrescar datos", use_container_width=False, type="secondary"):
+    if st.button("Refrescar datos", use_container_width=False, type="secondary"):
         st.cache_data.clear()
         for k in (
             "tx_master",
@@ -266,7 +266,7 @@ def render_portfolio_page(window: str) -> None:
 
     colcfg = {
         "Acción": st.column_config.CheckboxColumn(
-            label="➖",
+            label="Acción",
             help="Gestiona esta posición (vender o eliminar)",
             width="small",
             default=False,
@@ -319,7 +319,7 @@ def render_portfolio_page(window: str) -> None:
                 key=f"action_choice_{tkr}_{window}",
             )
             if choice == "Eliminar registro":
-                if st.button("🗑️ Confirmar eliminación", key=f"confirm_delete_{tkr}"):
+                if st.button("Confirmar eliminación", key=f"confirm_delete_{tkr}"):
                     deleted = delete_transactions_by_ticker(tkr)
                     if deleted <= 0:
                         st.error(
@@ -357,7 +357,7 @@ def render_portfolio_page(window: str) -> None:
                     step=0.01,
                     key=f"sell_px_{tkr}_{window}",
                 )
-                if st.button("💸 Registrar venta", key=f"confirm_sell_{tkr}"):
+                if st.button("Registrar venta", key=f"confirm_sell_{tkr}"):
                     if sell_shares <= 0:
                         st.error("Debes vender al menos 0.01 acciones.")
                     elif sell_shares > shares_available + 1e-9:
@@ -393,7 +393,7 @@ def render_portfolio_page(window: str) -> None:
                             build_masters(sync=True)
                             safe_rerun()
             else:
-                if st.button("❌ Cancelar", key=f"cancel_action_{tkr}"):
+                if st.button("Cancelar", key=f"cancel_action_{tkr}"):
                     _reset_action_state()
 
     port_ret = pd.Series(dtype=float)
@@ -431,7 +431,7 @@ def render_portfolio_page(window: str) -> None:
     else:
         st.info("Necesito al menos 2 días de histórico para calcular métricas.")
 
-    st.markdown("### 🕑 Historial")
+    st.markdown("### Historial")
     history_df = tx_df.copy()
     if not history_df.empty:
         amount_col = "NetAmount" if "NetAmount" in history_df.columns else "GrossAmount"

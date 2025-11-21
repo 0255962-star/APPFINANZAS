@@ -219,7 +219,7 @@ def _claude_scenario_explanation(prompt: str) -> str:
 
 def render_scenario_page(window: str) -> None:
     start_date = _start_date_for_window(window)
-    st.title("🧪 Simulador avanzado de escenarios")
+    st.title("Simulador avanzado de escenarios")
 
     def _build_or_fail(sync: bool = False):
         try:
@@ -232,7 +232,7 @@ def render_scenario_page(window: str) -> None:
             st.info(f"Detalle técnico: {exc}")
             st.stop()
 
-    if st.button("🔄 Refrescar datos", type="secondary"):
+    if st.button("Refrescar datos", type="secondary"):
         st.cache_data.clear()
         for k in (
             "tx_master",

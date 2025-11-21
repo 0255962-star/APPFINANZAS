@@ -205,7 +205,7 @@ def _fmt_percent(val):
 def render_candidate_page(window: str) -> None:
     """Render the Evaluar Candidato tab."""
     start_date = _start_date_for_window(window)
-    st.title("🔎 Evaluar Candidato")
+    st.title("Evaluar Candidato")
     chart_benchmark = "SPY"
 
     if need_build("prices_master") or masters_expired():
@@ -290,11 +290,11 @@ def render_candidate_page(window: str) -> None:
             last = recent.iloc[-1]
             prev = recent.iloc[-2]
             if last > prev:
-                arrow = "🟢↑"
+                arrow = "Sube"
             elif last < prev:
-                arrow = "🔴↓"
+                arrow = "Baja"
             else:
-                arrow = "⚪︎→"
+                arrow = "Sin cambio"
     with c_price:
         st.markdown("**Precio actual**")
         st.write(f"{_fmt_value(price_now)} {arrow}")
@@ -387,7 +387,7 @@ def render_candidate_page(window: str) -> None:
             }
         ).dropna(how="all")
 
-    st.markdown("### 📈 Comparativa visual")
+    st.markdown("### Comparativa visual")
     graph_choice = st.radio(
         "Selecciona la gráfica",
         ["Precio actual vs normalizado", "Precio normalizado"],
@@ -483,7 +483,7 @@ def render_candidate_page(window: str) -> None:
         if not aligned_corr_new.empty:
             corr_new = aligned_corr_new.corr().iloc[0, 1]
 
-    st.markdown("### 📋 Métricas del portafolio")
+    st.markdown("### Métricas del portafolio")
     metric_rows = [
         ("Rendimiento anualizado", "ret", True, True),
         ("Volatilidad anualizada", "vol", True, False),
@@ -757,7 +757,7 @@ def render_candidate_page(window: str) -> None:
                 st.markdown(f"**Opinión de IA:**\n\n{opinion}")
 
     if description_text or fundamentals_data or geo_lines:
-        st.markdown("### 🧾 Resumen fundamental")
+        st.markdown("### Resumen fundamental")
         if description_text:
             st.write(description_text[:800] + ("…" if len(description_text) > 800 else ""))
         if geo_lines:
@@ -768,7 +768,7 @@ def render_candidate_page(window: str) -> None:
                 with cols[idx % len(cols)]:
                     st.markdown(f"**{label}:** {value}")
 
-    with st.expander("🧾 Registrar esta acción en mi portafolio"):
+    with st.expander("Registrar esta acción en mi portafolio"):
         st.caption("Esta operación se agregará a la hoja *Transactions* respetando su estructura.")
         ws = open_ws("Transactions")
         values = ws.get_all_values() or []

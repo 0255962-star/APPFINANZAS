@@ -451,7 +451,7 @@ def _render_benchmark_compare(ticker: str, hist: pd.DataFrame, start: Optional[s
 
 
 def render_research_page(window: str) -> None:
-    st.title("🔎 Explorar / Research")
+    st.title("Explorar / Research")
 
     with st.form(key="ticker_search"):
         raw_ticker = st.text_input("Ticker (ej. AAPL, NVDA, KO):", value="")

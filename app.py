@@ -50,7 +50,7 @@ from app_core.ui_config import setup_ui
 
 def main() -> None:
     setup_ui()
-    st.sidebar.title("📊 Navegación")
+    st.sidebar.title("Navegación")
     page = st.sidebar.radio(
         "Ir a:",
         [
