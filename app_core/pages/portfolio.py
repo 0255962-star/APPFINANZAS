@@ -265,12 +265,21 @@ def render_portfolio_page(window: str) -> None:
     ).replace([np.inf, -np.inf], np.nan)
 
     colcfg = {
+        "Ticker": st.column_config.TextColumn(label="Ticker", width="small"),
+        "Shares": st.column_config.NumberColumn(label="Shares", format="%.4f", width="small"),
+        "Avg Buy": st.column_config.NumberColumn(label="Avg Buy", format="%.4f", width="medium"),
+        "Last": st.column_config.NumberColumn(label="Last", format="%.4f", width="medium"),
+        "P/L $": st.column_config.NumberColumn(label="P/L $", format="%.2f", width="medium"),
+        "P/L % (compra)": st.column_config.NumberColumn(label="P/L % (compra)", format="%.2f%%", width="medium"),
+        "Δ % ventana": st.column_config.NumberColumn(label="Δ % ventana", format="%.2f%%", width="medium"),
+        "Peso %": st.column_config.NumberColumn(label="Peso %", format="%.2f%%", width="small"),
+        "Valor": st.column_config.NumberColumn(label="Valor", format="%.2f", width="medium"),
         "Acción": st.column_config.CheckboxColumn(
             label="Acción",
             help="Gestiona esta posición (vender o eliminar)",
             width="small",
             default=False,
-        )
+        ),
     }
     signed_cols = ["P/L $", "P/L % (compra)", "Δ % ventana"]
     fmt = {
@@ -433,15 +442,31 @@ def render_portfolio_page(window: str) -> None:
                 (rets * wv).sum(axis=1) if rets.shape[1] and len(wv) else pd.Series(dtype=float)
             )
 
-            c1, c2, c3, c4, c5, c6 = st.columns(6)
-            c1.metric("Rend. anualizado", f"{(annualize_return(port_ret) or 0)*100:,.2f}%")
-            c2.metric("Vol. anualizada", f"{(annualize_vol(port_ret) or 0)*100:,.2f}%")
-            c3.metric("Sharpe", f"{(sharpe(port_ret, rf) or 0):.2f}")
+            metric_blocks = [
+                (
+                    "Rend. anualizado",
+                    f"{(annualize_return(port_ret) or 0)*100:,.2f}%",
+                ),
+                (
+                    "Vol. anualizada",
+                    f"{(annualize_vol(port_ret) or 0)*100:,.2f}%",
+                ),
+                ("Sharpe", f"{(sharpe(port_ret, rf) or 0):.2f}"),
+            ]
             cum = (1 + port_ret).cumprod()
             mdd = max_drawdown(cum)
-            c4.metric("Max Drawdown", f"{(mdd or 0)*100:,.2f}%")
-            c5.metric("Sortino", f"{(sortino(port_ret, rf) or 0):.2f}")
-            c6.metric("Calmar", f"{(calmar(port_ret) or 0):.2f}")
+            metric_blocks.extend(
+                [
+                    ("Max Drawdown", f"{(mdd or 0)*100:,.2f}%"),
+                    ("Sortino", f"{(sortino(port_ret, rf) or 0):.2f}"),
+                    ("Calmar", f"{(calmar(port_ret) or 0):.2f}"),
+                ]
+            )
+
+            for row_start in range(0, len(metric_blocks), 3):
+                cols = st.columns(3)
+                for col, (label, value) in zip(cols, metric_blocks[row_start : row_start + 3]):
+                    col.metric(label, value)
 
             curve = pd.DataFrame({"Portafolio": (1 + port_ret).cumprod()})
             if bench_ret is not None and not bench_ret.empty:

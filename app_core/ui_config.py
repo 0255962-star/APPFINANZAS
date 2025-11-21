@@ -43,21 +43,20 @@ def setup_ui() -> None:
         }
         h1, h2, h3, h4 {color: var(--color-text);} 
         p, label, span, .stMarkdown {color: var(--color-text);} 
-        div[data-testid="stMetricValue"]{font-size:1.6rem}
+        div[data-testid="stMetricValue"]{font-size:1.4rem;}
         div[data-testid="stMetricLabel"]{
-            font-size:0.92rem;
+            font-size:0.95rem;
             color: var(--color-muted);
             white-space: normal;
-            line-height: 1.25;
+            line-height: 1.3;
         }
         div[data-testid="stMetric"]{
-            min-width: 150px;
-        }
-        div[data-testid="stMetric"]{
+            min-width: 180px;
             background: var(--color-panel);
             border:1px solid var(--color-border);
             border-radius:10px;
-            padding:0.75rem;
+            padding:0.85rem 0.9rem;
+            margin-bottom:0.85rem;
         }
         .stButton>button {
             background: var(--color-primary);
@@ -75,11 +74,13 @@ def setup_ui() -> None:
         }
         .stDataFrame table {
             color: var(--color-text);
+            width: 100%;
         }
         .stDataFrame th {
             background: var(--color-surface);
             color: var(--color-text);
             border-bottom: 1px solid var(--color-border);
+            white-space: nowrap;
         }
         .stDataFrame th:last-child, .stDataFrame td:last-child {
             width: 80px !important;
@@ -88,6 +89,9 @@ def setup_ui() -> None:
         .stDataFrame td {
             background: var(--color-panel);
             color: var(--color-text);
+            font-size: 0.95rem;
+            white-space: nowrap;
+            padding: 6px 10px;
         }
         .stDataFrame tbody tr:nth-child(even) td {background: #0f182a;}
         .stDataFrame tbody tr:hover td {background: #1b2640;}
