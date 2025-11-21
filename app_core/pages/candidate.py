@@ -566,7 +566,7 @@ def render_candidate_page(window: str) -> None:
             if better is None or delta_val is None or np.isnan(delta_val):
                 return [""]
             improved = delta_val >= 0 if better else delta_val <= 0
-            color = "#22c55e" if improved else "#ef4444"
+            color = "var(--color-success)" if improved else "var(--color-danger)"
             return [f"color: {color}; font-weight:bold;"]
 
         styled = (

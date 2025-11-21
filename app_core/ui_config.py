@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+import pandas as pd
+
 import streamlit as st
 import yfinance as yf
 
@@ -42,6 +44,15 @@ def setup_ui() -> None:
         h1, h2, h3, h4 {color: var(--color-text);} 
         p, label, span, .stMarkdown {color: var(--color-text);} 
         div[data-testid="stMetricValue"]{font-size:1.6rem}
+        div[data-testid="stMetricLabel"]{
+            font-size:0.92rem;
+            color: var(--color-muted);
+            white-space: normal;
+            line-height: 1.25;
+        }
+        div[data-testid="stMetric"]{
+            min-width: 150px;
+        }
         div[data-testid="stMetric"]{
             background: var(--color-panel);
             border:1px solid var(--color-border);
@@ -107,4 +118,29 @@ def safe_rerun() -> None:
             st.experimental_rerun()
         except Exception:
             pass
+
+
+def style_signed_numbers(df: pd.DataFrame, columns: list[str]) -> pd.io.formats.style.Styler | pd.DataFrame:
+    """Return a Styler with green/red text for signed numeric columns.
+
+    If the input is not a DataFrame or no requested columns exist, the input
+    is returned unchanged to avoid impacting calling logic.
+    """
+
+    if df is None or not isinstance(df, pd.DataFrame):
+        return df
+    subset = [c for c in columns if c in df.columns]
+    if not subset:
+        return df
+
+    def _signed_style(val):
+        if pd.isna(val):
+            return ""
+        if val > 0:
+            return "color: var(--color-success); font-weight: 600;"
+        if val < 0:
+            return "color: var(--color-danger); font-weight: 600;"
+        return "color: var(--color-text);"
+
+    return df.style.applymap(_signed_style, subset=subset)
 

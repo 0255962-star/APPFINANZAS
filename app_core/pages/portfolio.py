@@ -23,7 +23,7 @@ from ..metrics import (
 from ..prices_fetch import normalize_symbol
 from ..sheets_client import open_ws
 from ..tx_positions import delete_transactions_by_ticker, positions_from_tx
-from ..ui_config import safe_rerun
+from ..ui_config import safe_rerun, style_signed_numbers
 
 DEFAULT_TX_HEADERS = [
     "TradeID",
@@ -272,16 +272,42 @@ def render_portfolio_page(window: str) -> None:
             default=False,
         )
     }
+    signed_cols = ["P/L $", "P/L % (compra)", "Δ % ventana"]
+    fmt = {
+        "Shares": "{:.4f}",
+        "Avg Buy": "{:.4f}",
+        "Last": "{:.4f}",
+        "P/L $": "{:.2f}",
+        "P/L % (compra)": "{:.2f}%",
+        "Δ % ventana": "{:.2f}%",
+        "Peso %": "{:.2f}%",
+        "Valor": "{:.2f}",
+    }
     display_key = f"portfolio_view_{window}"
     display_df = view.copy()
-    editor_df = st.data_editor(
-        display_df,
-        hide_index=True,
-        use_container_width=True,
-        column_config=colcfg,
-        disabled=[c for c in display_df.columns if c != "Acción"],
-        key=display_key,
-    )
+    styled_view = style_signed_numbers(display_df, signed_cols)
+    try:
+        styled_view = styled_view.format(fmt)
+    except Exception:
+        styled_view = display_df
+    try:
+        editor_df = st.data_editor(
+            styled_view,
+            hide_index=True,
+            use_container_width=True,
+            column_config=colcfg,
+            disabled=[c for c in display_df.columns if c != "Acción"],
+            key=display_key,
+        )
+    except Exception:
+        editor_df = st.data_editor(
+            display_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config=colcfg,
+            disabled=[c for c in display_df.columns if c != "Acción"],
+            key=f"{display_key}_raw",
+        )
     if editor_df.empty:
         st.info("No hay posiciones para mostrar en la tabla principal.")
 

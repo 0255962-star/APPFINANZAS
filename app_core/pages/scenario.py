@@ -13,7 +13,7 @@ import streamlit as st
 from ..masters import build_masters, masters_expired, need_build
 from ..metrics import annualize_vol, max_drawdown
 from ..tx_positions import positions_from_tx
-from ..ui_config import safe_rerun
+from ..ui_config import safe_rerun, style_signed_numbers
 
 
 GROWTH_TICKERS = {
@@ -365,7 +365,18 @@ def render_scenario_page(window: str) -> None:
             "DeltaValue": "Δ valor",
         }
     )
-    st.dataframe(display_df.style.format({"Precio actual": "{:.2f}", "Precio escenario": "{:.2f}", "Valor actual": "{:.2f}", "Valor escenario": "{:.2f}", "% cambio": "{:.2%}", "Δ valor": "{:.2f}"}), use_container_width=True)
+    styled_positions = style_signed_numbers(display_df, ["% cambio", "Δ valor"])
+    styled_positions = styled_positions.format(
+        {
+            "Precio actual": "{:.2f}",
+            "Precio escenario": "{:.2f}",
+            "Valor actual": "{:.2f}",
+            "Valor escenario": "{:.2f}",
+            "% cambio": "{:.2%}",
+            "Δ valor": "{:.2f}",
+        }
+    )
+    st.dataframe(styled_positions, use_container_width=True)
 
     tab_val, tab_impact, tab_dist = st.tabs([
         "Valor del portafolio",
