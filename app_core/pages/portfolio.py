@@ -266,7 +266,8 @@ def render_portfolio_page(window: str) -> None:
         }
     ).replace([np.inf, -np.inf], np.nan)
     signed_cols = ["P/L $", "P/L % (compra)", "Δ % ventana"]
-    view[signed_cols] = view[signed_cols].fillna(0)
+    for col in signed_cols:
+        view[col] = pd.to_numeric(view[col], errors="coerce").fillna(0)
 
     colcfg = {
         "Ticker": st.column_config.TextColumn(label="Ticker", width="small"),

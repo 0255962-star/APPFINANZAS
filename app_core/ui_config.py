@@ -143,10 +143,16 @@ def style_signed_numbers(df: pd.DataFrame, columns: list[str]) -> pd.io.formats.
         if pd.isna(val):
             return ""
         if val > 0:
-            return "color: var(--color-success); font-weight: 600;"
+            return (
+                "color: #3fb27f; font-weight: 600; "
+                "background-color: rgba(63, 178, 127, 0.08);"
+            )
         if val < 0:
-            return "color: var(--color-danger); font-weight: 600;"
-        return "color: var(--color-text);"
+            return (
+                "color: #ef4444; font-weight: 600; "
+                "background-color: rgba(239, 68, 68, 0.08);"
+            )
+        return "color: #e5e7eb;"
 
     return df.style.applymap(_signed_style, subset=subset)
 
