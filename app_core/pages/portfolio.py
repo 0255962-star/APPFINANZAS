@@ -239,11 +239,12 @@ def render_portfolio_page(window: str) -> None:
         pos_df.set_index("Ticker")["MarketPrice"] / pos_df.set_index("Ticker")["AvgCost"]
         - 1
     ).replace([np.inf, -np.inf], np.nan)
+    since_buy = since_buy.fillna(0)
     window_change = pd.Series(index=pos_df_view["Ticker"], dtype=float)
     if prices is not None and not prices.empty and prices.shape[0] >= 2:
         window_change = (
             prices.ffill().iloc[-1] / prices.ffill().iloc[0] - 1
-        ).reindex(pos_df_view["Ticker"]).fillna(np.nan)
+        ).reindex(pos_df_view["Ticker"]).fillna(0)
 
     view = pd.DataFrame(
         {
@@ -251,18 +252,21 @@ def render_portfolio_page(window: str) -> None:
             "Shares": pos_df_view["Shares"].values,
             "Avg Buy": pos_df_view["AvgCost"].values,
             "Last": pos_df_view["MarketPrice"].values,
-            "P/L $": pos_df_view["UnrealizedPL"].values,
+            "P/L $": pos_df_view["UnrealizedPL"].fillna(0).values,
             "P/L % (compra)": (
-                since_buy.reindex(pos_df_view["Ticker"]).values * 100.0
+                since_buy.reindex(pos_df_view["Ticker"]).fillna(0).values * 100.0
             ),
             "Δ % ventana": (
-                window_change.reindex(pos_df_view["Ticker"]).values * 100.0
+                window_change.reindex(pos_df_view["Ticker"]).fillna(0).values
+                * 100.0
             ),
             "Peso %": (w.reindex(pos_df_view["Ticker"]).values * 100.0),
             "Valor": pos_df_view["MarketValue"].values,
             "Acción": [False] * len(pos_df_view),
         }
     ).replace([np.inf, -np.inf], np.nan)
+    signed_cols = ["P/L $", "P/L % (compra)", "Δ % ventana"]
+    view[signed_cols] = view[signed_cols].fillna(0)
 
     colcfg = {
         "Ticker": st.column_config.TextColumn(label="Ticker", width="small"),
@@ -281,7 +285,6 @@ def render_portfolio_page(window: str) -> None:
             default=False,
         ),
     }
-    signed_cols = ["P/L $", "P/L % (compra)", "Δ % ventana"]
     fmt = {
         "Shares": "{:.4f}",
         "Avg Buy": "{:.4f}",
