@@ -51,7 +51,7 @@ def setup_ui() -> None:
             line-height: 1.3;
         }
         div[data-testid="stMetric"]{
-            min-width: 180px;
+            min-width: 200px;
             background: var(--color-panel);
             border:1px solid var(--color-border);
             border-radius:10px;
@@ -75,12 +75,13 @@ def setup_ui() -> None:
         .stDataFrame table {
             color: var(--color-text);
             width: 100%;
+            table-layout: auto;
         }
         .stDataFrame th {
             background: var(--color-surface);
             color: var(--color-text);
             border-bottom: 1px solid var(--color-border);
-            white-space: nowrap;
+            white-space: normal;
         }
         .stDataFrame th:last-child, .stDataFrame td:last-child {
             width: 80px !important;
@@ -90,7 +91,8 @@ def setup_ui() -> None:
             background: var(--color-panel);
             color: var(--color-text);
             font-size: 0.95rem;
-            white-space: nowrap;
+            white-space: normal;
+            word-break: break-word;
             padding: 6px 10px;
         }
         .stDataFrame tbody tr:nth-child(even) td {background: #0f182a;}

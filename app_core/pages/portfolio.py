@@ -294,29 +294,26 @@ def render_portfolio_page(window: str) -> None:
     }
     display_key = f"portfolio_view_{window}"
     display_df = view.copy()
-    styled_view = style_signed_numbers(display_df, signed_cols)
+    styled_view = style_signed_numbers(display_df.copy(), signed_cols)
     try:
         styled_view = styled_view.format(fmt)
     except Exception:
         styled_view = display_df
-    try:
-        editor_df = st.data_editor(
-            styled_view,
-            hide_index=True,
-            use_container_width=True,
-            column_config=colcfg,
-            disabled=[c for c in display_df.columns if c != "Acción"],
-            key=display_key,
-        )
-    except Exception:
-        editor_df = st.data_editor(
-            display_df,
-            hide_index=True,
-            use_container_width=True,
-            column_config=colcfg,
-            disabled=[c for c in display_df.columns if c != "Acción"],
-            key=f"{display_key}_raw",
-        )
+
+    st.dataframe(styled_view, hide_index=True, use_container_width=True)
+
+    action_df = display_df[["Ticker", "Acción"]].copy()
+    editor_df = st.data_editor(
+        action_df,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Ticker": colcfg["Ticker"],
+            "Acción": colcfg["Acción"],
+        },
+        disabled=["Ticker"],
+        key=display_key,
+    )
     if editor_df.empty:
         st.info("No hay posiciones para mostrar en la tabla principal.")
 
