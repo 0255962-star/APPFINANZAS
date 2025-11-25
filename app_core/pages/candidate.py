@@ -6,6 +6,8 @@ import re
 from datetime import datetime, timedelta
 from typing import Optional
 
+import requests
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -203,7 +205,7 @@ def _fmt_percent(val):
 def render_candidate_page(window: str) -> None:
     """Render the Evaluar Candidato tab."""
     start_date = _start_date_for_window(window)
-    st.title("🔎 Evaluar Candidato")
+    st.title("Evaluar Candidato")
     chart_benchmark = "SPY"
 
     if need_build("prices_master") or masters_expired():
@@ -288,11 +290,11 @@ def render_candidate_page(window: str) -> None:
             last = recent.iloc[-1]
             prev = recent.iloc[-2]
             if last > prev:
-                arrow = "🟢↑"
+                arrow = "Sube"
             elif last < prev:
-                arrow = "🔴↓"
+                arrow = "Baja"
             else:
-                arrow = "⚪︎→"
+                arrow = "Sin cambio"
     with c_price:
         st.markdown("**Precio actual**")
         st.write(f"{_fmt_value(price_now)} {arrow}")
@@ -385,7 +387,7 @@ def render_candidate_page(window: str) -> None:
             }
         ).dropna(how="all")
 
-    st.markdown("### 📈 Comparativa visual")
+    st.markdown("### Comparativa visual")
     graph_choice = st.radio(
         "Selecciona la gráfica",
         ["Precio actual vs normalizado", "Precio normalizado"],
@@ -481,7 +483,7 @@ def render_candidate_page(window: str) -> None:
         if not aligned_corr_new.empty:
             corr_new = aligned_corr_new.corr().iloc[0, 1]
 
-    st.markdown("### 📋 Métricas del portafolio")
+    st.markdown("### Métricas del portafolio")
     metric_rows = [
         ("Rendimiento anualizado", "ret", True, True),
         ("Volatilidad anualizada", "vol", True, False),
@@ -564,7 +566,7 @@ def render_candidate_page(window: str) -> None:
             if better is None or delta_val is None or np.isnan(delta_val):
                 return [""]
             improved = delta_val >= 0 if better else delta_val <= 0
-            color = "#22c55e" if improved else "#ef4444"
+            color = "var(--color-success)" if improved else "var(--color-danger)"
             return [f"color: {color}; font-weight:bold;"]
 
         styled = (
@@ -574,8 +576,188 @@ def render_candidate_page(window: str) -> None:
     else:
         st.info("No pude calcular métricas del portafolio para este escenario.")
 
+    def get_recent_news_summary(ticker: str) -> str:
+        """Return a brief summary of recent news for ticker via Alpha Vantage."""
+        api_key = st.secrets.get("ALPHAVANTAGE_API_KEY")
+        if not api_key:
+            return "No pude obtener la API key de Alpha Vantage."
+        url = "https://www.alphavantage.co/query"
+        params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "apikey": api_key}
+        try:
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # pragma: no cover - network guarded
+            return f"No pude consultar noticias: {exc}"
+
+        feed = data.get("feed", []) if isinstance(data, dict) else []
+        if not feed:
+            return "No encontré noticias recientes para este ticker."
+
+        summaries = []
+        sentiments = []
+        for item in feed[:5]:
+            title = item.get("title") or "Sin título"
+            source = item.get("source") or "Fuente desconocida"
+            summary = item.get("summary") or "Sin resumen"
+            overall = item.get("overall_sentiment_label") or "Neutral"
+            sentiments.append(overall)
+            summaries.append(f"• {title} ({source}) — {summary[:200]}{'…' if len(summary) > 200 else ''}")
+
+        sentiment_note = "Neutral"
+        if sentiments:
+            counts = {s: sentiments.count(s) for s in set(sentiments)}
+            sentiment_note = max(counts, key=counts.get)
+        summaries.append(f"Sentimiento predominante: {sentiment_note}")
+        return "\n".join(summaries)
+
+    def get_claude_opinion(prompt: str) -> str:
+        """Call Claude API with provided prompt and return text."""
+        api_key = st.secrets.get("CLAUDE_API_KEY")
+        if not api_key:
+            return "No encontré la clave de Claude en los secrets."
+
+        preferred_model = st.secrets.get("CLAUDE_MODEL", "claude-3-sonnet-20240229")
+        fallback_model = "claude-3-haiku-20240307"
+
+        def _parse_error(resp):
+            detail = None
+            try:
+                detail_data = resp.json()
+                if isinstance(detail_data, dict):
+                    err_obj = detail_data.get("error") or {}
+                    if isinstance(err_obj, dict):
+                        detail = err_obj.get("message") or err_obj.get("type")
+            except Exception:
+                detail = resp.text or None
+            return detail or "Inténtalo de nuevo en unos minutos."
+
+        def _attempt(model_name: str):
+            headers = {
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+                "accept": "application/json",
+                "anthropic-beta": "messages-2023-12-15",
+            }
+            payload = {
+                "model": model_name,
+                "max_tokens": 600,
+                "temperature": 0.3,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt,
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            try:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    json=payload,
+                    headers=headers,
+                    timeout=30,
+                )
+            except Exception as exc:  # pragma: no cover - network guarded
+                return None, f"No pude obtener la opinión de IA. Detalle técnico: {exc}"
+
+            if resp.status_code >= 400:
+                return None, _parse_error(resp)
+
+            try:
+                data = resp.json()
+            except Exception as exc:  # pragma: no cover - network guarded
+                return None, f"No pude interpretar la respuesta de IA. Detalle técnico: {exc}"
+            return data, None
+
+        data, err = _attempt(preferred_model)
+        if err and preferred_model != fallback_model:
+            # Reintenta con un modelo más liviano si el primero falla (por ejemplo 404/405 del endpoint).
+            data, err = _attempt(fallback_model)
+
+        if err:
+            return f"No pude obtener la opinión de IA. {err}"
+
+        content = data.get("content") if isinstance(data, dict) else None
+        if isinstance(content, list) and content:
+            blocks = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_block = block.get("text")
+                    if text_block:
+                        blocks.append(text_block)
+            if blocks:
+                return "\n\n".join(blocks)
+        if isinstance(content, str):
+            return content
+        return "No recibí texto de respuesta de Claude."
+
+    ia_container = st.container()
+    with ia_container:
+        if st.button("Opinión de IA"):
+            with st.spinner("Generando opinión de IA…"):
+                metric_lookup = {
+                    row["Métrica"]: (
+                        row.get("ActualValue"),
+                        row.get("NewValue"),
+                        row.get("Delta"),
+                        row.get("is_pct"),
+                    )
+                    for _, row in df_metrics.iterrows()
+                }
+
+                def _val_tuple(label):
+                    return metric_lookup.get(label, (np.nan, np.nan, np.nan, False))
+
+                def _fmt(num, is_pct=False):
+                    if num is None or (isinstance(num, float) and np.isnan(num)):
+                        return "N/D"
+                    return f"{num * 100:,.2f}%" if is_pct else f"{num:,.4f}"
+
+                rend_cur, rend_new, rend_d, rend_pct = _val_tuple("Rendimiento anualizado")
+                vol_cur, vol_new, vol_d, vol_pct = _val_tuple("Volatilidad anualizada")
+                sharpe_cur, sharpe_new, sharpe_d, _ = _val_tuple("Sharpe")
+                sortino_cur, sortino_new, sortino_d, _ = _val_tuple("Sortino")
+                mdd_cur, mdd_new, mdd_d, mdd_pct = _val_tuple("Max Drawdown")
+                calmar_cur, calmar_new, calmar_d, _ = _val_tuple("Calmar")
+                beta_cur, beta_new, beta_d, _ = _val_tuple("Beta vs SPY")
+                te_cur, te_new, te_d, te_pct = _val_tuple("Tracking Error")
+                corr_cur, corr_new, corr_d, _ = _val_tuple("Correlación candidato-portafolio")
+
+                news_summary = get_recent_news_summary(cand)
+
+                prompt = (
+                    "Contexto: eres un profesor de finanzas buena onda hablando con un estudiante mexicano de 7º semestre que ya entiende Sharpe, Sortino y drawdown. "
+                    f"Estamos evaluando el impacto de la acción {cand} ({name}) en el portafolio actual. "
+                    "Tono formal–casual: claro, técnico pero accesible, con alguna frase ligera ocasional.\n\n"
+                    "Datos para tu referencia (no recites uno por uno, interprétalos):\n"
+                    f"- Rendimiento anualizado actual {_fmt(rend_cur, rend_pct)} vs candidato {_fmt(rend_new, rend_pct)} (Δ {_fmt(rend_d, rend_pct)})\n"
+                    f"- Volatilidad anualizada {_fmt(vol_cur, vol_pct)} → {_fmt(vol_new, vol_pct)} (Δ {_fmt(vol_d, vol_pct)})\n"
+                    f"- Sharpe {_fmt(sharpe_cur)} → {_fmt(sharpe_new)} (Δ {_fmt(sharpe_d)}); Sortino {_fmt(sortino_cur)} → {_fmt(sortino_new)}\n"
+                    f"- Max Drawdown {_fmt(mdd_cur, mdd_pct)} → {_fmt(mdd_new, mdd_pct)} (Δ {_fmt(mdd_d, mdd_pct)}) y Calmar {_fmt(calmar_cur)} → {_fmt(calmar_new)}\n"
+                    f"- Beta vs SPY {_fmt(beta_cur)} → {_fmt(beta_new)} (Δ {_fmt(beta_d)}); Tracking Error {_fmt(te_cur, te_pct)} → {_fmt(te_new, te_pct)}\n"
+                    f"- Correlación candidato–portafolio {_fmt(corr_cur)} → {_fmt(corr_new)} (Δ {_fmt(corr_d)})\n\n"
+                    "Instrucciones de salida: inicia mencionando que analizas {ticker} ({company}) dentro del portafolio. "
+                    "Organiza en bloques temáticos (rentabilidad vs riesgo; drawdown/resiliencia; beta/tracking error y cercanía al benchmark; diversificación por correlación). "
+                    "Interpreta si mejora o empeora el perfil riesgo–retorno, si la mejora es marginal o sustancial y para qué tipo de inversionista encaja. "
+                    "No enumeres métricas una por una porque el alumno ya ve la tabla; usa los números solo para justificar conclusiones. "
+                    "Cierra con una conclusión de 3–4 líneas que responda si vale la pena incluir {ticker} ({company}), bajo qué tolerancia a riesgo/drawdown y qué tan fuerte es la mejora.\n\n"
+                    "Noticias y sentimiento: usa este resumen si existe, y si no hay noticias dilo en una sola línea y sigue con el análisis cuantitativo. Resume en 2–3 líneas el sentimiento del mercado: \n"
+                    f"{news_summary}\n"
+                    "Entrega el análisis en 10–12 líneas aprox. con viñetas o mini-bloques, tono de profe accesible y sin párrafo gigante."
+                ).format(ticker=cand, company=name)
+
+                opinion = get_claude_opinion(prompt)
+                st.markdown(f"**Opinión de IA:**\n\n{opinion}")
+
     if description_text or fundamentals_data or geo_lines:
-        st.markdown("### 🧾 Resumen fundamental")
+        st.markdown("### Resumen fundamental")
         if description_text:
             st.write(description_text[:800] + ("…" if len(description_text) > 800 else ""))
         if geo_lines:
@@ -586,7 +768,7 @@ def render_candidate_page(window: str) -> None:
                 with cols[idx % len(cols)]:
                     st.markdown(f"**{label}:** {value}")
 
-    with st.expander("🧾 Registrar esta acción en mi portafolio"):
+    with st.expander("Registrar esta acción en mi portafolio"):
         st.caption("Esta operación se agregará a la hoja *Transactions* respetando su estructura.")
         ws = open_ws("Transactions")
         values = ws.get_all_values() or []
@@ -681,8 +863,8 @@ def render_candidate_page(window: str) -> None:
                 elif not headers:
                     st.error("No encontré encabezados válidos en la hoja Transactions.")
                 else:
-                    gross_amount = shares_real * price_entry
-                    net_amount = gross_amount - fees_input - taxes_input
+                    gross_amount = round(float(shares_real) * float(price_entry), 4)
+                    net_amount = round(gross_amount - float(fees_input) - float(taxes_input), 4)
 
                     row_out = [""] * len(headers)
 
@@ -691,7 +873,7 @@ def render_candidate_page(window: str) -> None:
                         if idx is not None and idx < len(row_out):
                             row_out[idx] = value
 
-                    set_field("TradeID", str(next_trade_id))
+                    set_field("TradeID", int(next_trade_id))
                     set_field("Account", account_default)
                     set_field("Ticker", cand)
                     set_field("Name", info.get("longName") or cand)
@@ -699,10 +881,10 @@ def render_candidate_page(window: str) -> None:
                     set_field("Currency", currency_default)
                     set_field("TradeDate", trade_date.isoformat())
                     set_field("Side", "Buy")
-                    set_field("Shares", shares_real)
-                    set_field("Price", price_entry)
-                    set_field("Fees", fees_input)
-                    set_field("Taxes", taxes_input)
+                    set_field("Shares", round(float(shares_real), 6))
+                    set_field("Price", round(float(price_entry), 6))
+                    set_field("Fees", round(float(fees_input), 6))
+                    set_field("Taxes", round(float(taxes_input), 6))
                     set_field("FXRate", 1.0)
                     set_field("GrossAmount", gross_amount)
                     set_field("NetAmount", net_amount)
@@ -716,3 +898,39 @@ def render_candidate_page(window: str) -> None:
                         st.error(f"No pude registrar la compra: {exc}")
                     else:
                         st.success("Se registró la operación. Refresca 'Mi Portafolio' para verla reflejada.")
+
+                        # Mantener la sesión sincronizada con la nueva fila para que el portafolio la tome en cuenta.
+                        tx_master = st.session_state.get("tx_master")
+                        if isinstance(tx_master, pd.DataFrame):
+                            new_row = {h: "" for h in headers}
+
+                            def assign_field(col_name: str, value):
+                                idx = col_index.get(_norm_header(col_name))
+                                if idx is not None and idx < len(headers):
+                                    new_row[headers[idx]] = value
+
+                            assign_field("TradeID", int(next_trade_id))
+                            assign_field("Account", account_default)
+                            assign_field("Ticker", cand)
+                            assign_field("Name", info.get("longName") or cand)
+                            assign_field("AssetType", asset_type_default)
+                            assign_field("Currency", currency_default)
+                            assign_field("TradeDate", trade_date.isoformat())
+                            assign_field("Side", "Buy")
+                            assign_field("Shares", round(float(shares_real), 6))
+                            assign_field("Price", round(float(price_entry), 6))
+                            assign_field("Fees", round(float(fees_input), 6))
+                            assign_field("Taxes", round(float(taxes_input), 6))
+                            assign_field("FXRate", 1.0)
+                            assign_field("GrossAmount", gross_amount)
+                            assign_field("NetAmount", net_amount)
+                            assign_field("LotID", f"L{next_lot_id}")
+                            assign_field("Source", source_default)
+                            assign_field("Notes", note)
+
+                            appended = pd.DataFrame([new_row])
+                            if not tx_master.empty:
+                                appended = appended.reindex(columns=tx_master.columns, fill_value="")
+                            st.session_state["tx_master"] = pd.concat(
+                                [tx_master, appended], ignore_index=True
+                            )
